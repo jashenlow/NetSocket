@@ -30,7 +30,8 @@
 #include <WS2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 
-#define GetSocketError (WSAGetLastError())
+#define GetSocketError WSAGetLastError()
+#define ConnectingErrCode WSAEWOULDBLOCK
 #elif defined(__APPLE__) || defined(__linux__) || defined(__unix__)
 #define SOCKET_PLATFORM_UNIX
 
@@ -43,9 +44,11 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
-#define GetSocketError (errno)
+#define GetSocketError errno
+#define ConnectingErrCode EINPROGRESS
 #endif
 
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -76,10 +79,13 @@ class NetSocket
 public:
 	struct SocketInfo
 	{
-		size_t		SocketFD;
-		sockaddr_in Addr;
-		std::string IPAddress;
-		uint16_t	Port;
+		char HostName[NI_MAXHOST];
+		char Service[NI_MAXSERV];
+		size_t			SocketFD;
+		sockaddr_in		Addr;	//IPv4 Only
+		sockaddr_in6	Addr6;	//IPv6 Only
+		std::string		IPAddress;
+		uint16_t		Port;
 
 		SocketInfo()
 		{
@@ -88,12 +94,20 @@ public:
 
 		void Reset()
 		{
+			memset(HostName, '\0', sizeof(HostName));
+			memset(Service, '\0', sizeof(Service));
 			SocketFD = 0;
 
 			Addr.sin_family = AF_INET;
 			memset(&Addr.sin_addr, 0, sizeof(Addr.sin_addr));
 			Addr.sin_port = 0;
 			memset(Addr.sin_zero, '\0', sizeof(Addr.sin_zero));
+			
+			Addr6.sin6_family = AF_INET6;
+			memset(&Addr6.sin6_addr, 0, sizeof(Addr6.sin6_addr));
+			Addr6.sin6_port = 0;
+			Addr6.sin6_flowinfo = 0;
+			Addr6.sin6_scope_id = 0;
 
 			IPAddress.clear();
 			Port = 0;
@@ -102,9 +116,9 @@ public:
 
 	struct LocalSocketInfo : SocketInfo
 	{
-		std::vector<SocketInfo> RemoteSocketInfo;	//This is used to store UDP sender info, TCP connected clients, and connected TCP server info.
-		SocketType	Type = SocketType::UDP;
-		IPPROTO		Protocol = IPPROTO::IPPROTO_UDP;
+		SocketType	Type		= SocketType::UDP;
+		IPPROTO		Protocol	= IPPROTO::IPPROTO_UDP;
+		unsigned long Blocking	= 0;	//0 = Non-blocking, 1 = blocking.	
 	};
 
 	//Socket Constructor
@@ -122,13 +136,19 @@ public:
 	//Socket Destructor
 	~NetSocket()
 	{
-		CloseSocket();
+		CloseThisSocket();
 	}
 
 	//Get all info about this socket
 	const LocalSocketInfo& GetThisSocketInfo() const
 	{
 		return thisSocketInfo;
+	}
+
+	//Get the list of remote socket info.
+	const std::vector<SocketInfo>& GetRemoteSocketInfo() const
+	{
+		return remoteSocketInfo;
 	}
 
 	/*
@@ -138,6 +158,12 @@ public:
 	const uint16_t& GetIPVersion(const SocketInfo& socket) const
 	{
 		return thisSocketInfo.Addr.sin_family;
+	}
+
+	//Returns the current hostname of the specified socket.
+	const char* GetHostName(const SocketInfo& socket)
+	{
+		return socket.HostName;
 	}
 
 	//Get transmit buffer size
@@ -155,20 +181,21 @@ public:
 
 #ifdef SOCKET_PLATFORM_WINDOWS
 	//Initialize socket
-	WinsockError Init(const char* localIP, const uint16_t& localPort, const SocketType& type, const bool& isNonBlocking)
+	WinsockError Init(const char* localIP, const uint16_t& localPort, const SocketType& type, const bool& isNonBlocking = false)
 	{
+		connectedToServer		= false;
 		maxBufferSize			= (type == SocketType::UDP) ? MAX_UDP_BUFFER_SIZE : MAX_TCP_BUFFER_SIZE;
-		unsigned long blocking	= (unsigned long)isNonBlocking;
 		WinsockError errorcode	= WinsockError::OK;
 
 		//Set local socket details
-		thisSocketInfo.IPAddress	= localIP;
-		thisSocketInfo.Port			= localPort;
-		thisSocketInfo.Type			= type;
-		thisSocketInfo.Protocol		= (type == SocketType::UDP) ? IPPROTO::IPPROTO_UDP : IPPROTO::IPPROTO_TCP;
+		thisSocketInfo.Blocking			= (unsigned long)isNonBlocking;
+		thisSocketInfo.IPAddress		= localIP;
+		thisSocketInfo.Port				= localPort;
+		thisSocketInfo.Type				= type;
+		thisSocketInfo.Protocol			= (type == SocketType::UDP) ? IPPROTO::IPPROTO_UDP : IPPROTO::IPPROTO_TCP;
 
 		thisSocketInfo.Addr.sin_family = AF_INET;
-		inet_pton(AF_INET, localIP, &thisSocketInfo.Addr.sin_addr);
+		inet_pton(thisSocketInfo.Addr.sin_family, localIP, &thisSocketInfo.Addr.sin_addr);
 		thisSocketInfo.Addr.sin_port = htons(localPort);
 
 		//Initialize Winsock
@@ -184,35 +211,49 @@ public:
 				errorcode = WinsockError::FAIL_SOCKET;
 			else
 			{
-				//Bind socket to localIP and localPort
-				if (bind(thisSocketInfo.SocketFD, (sockaddr*)&thisSocketInfo.Addr, sizeof(sockaddr_in)) == SOCKET_ERROR)
-					errorcode = WinsockError::FAIL_BIND;
-				else
+				if (type != SocketType::TCP_CLIENT)	//TCP clients don't need to bind.
+				{
+					//Bind socket to localIP and localPort
+					if (bind(thisSocketInfo.SocketFD, (sockaddr*)&thisSocketInfo.Addr, sizeof(sockaddr_in)) == SOCKET_ERROR)
+						errorcode = WinsockError::FAIL_BIND;
+				}
+
+				if (errorcode == WinsockError::OK)
 				{
 					//Set socket blocking flag
-					ioctlsocket(thisSocketInfo.SocketFD, FIONBIO, &blocking);
+					ioctlsocket(thisSocketInfo.SocketFD, FIONBIO, &thisSocketInfo.Blocking);
 
 					if (rxBuffer.empty())
 						SetRxBufferSize(maxBufferSize);
 					if (txBuffer.empty())
 						SetTxBufferSize(BUFFER_DEFAULT_SIZE);
 
-					thisSocketInfo.RemoteSocketInfo.clear();
+					//Force close all remote sockets
+					if (!remoteSocketInfo.empty())
+					{
+						for (auto& sockInfo : remoteSocketInfo)
+							closesocket(sockInfo.SocketFD);
+					}
+
+					remoteSocketInfo.clear();
 
 					if ((thisSocketInfo.Type == SocketType::UDP) || (thisSocketInfo.Type == SocketType::TCP_CLIENT))
-						thisSocketInfo.RemoteSocketInfo.resize(1);					
+						remoteSocketInfo.resize(1);
+
+					//Get the hostname of this machine.
+					ResolveHostName(thisSocketInfo);
 				}
 			}
 		}
 
 		if (errorcode != WinsockError::OK)
-			CloseSocket();
+			CloseThisSocket();
 
 		return errorcode;
 	}
 
 	//Close the socket
-	bool CloseSocket() const
+	bool CloseThisSocket() const
 	{
 		if (closesocket(thisSocketInfo.SocketFD) != SOCKET_ERROR)
 			return (WSACleanup() == 0);
@@ -220,28 +261,8 @@ public:
 			return false;
 	}
 
-	/*
-	Attempts to connect to a TCP server if this socket is a TCP client.
-	Returns TRUE if connection is successful, FALSE if connection is unsuccessful or if this socket is a UDP socket.
-	*/
-	bool ConnectServerTCP(const char* serverIP, const uint16_t& serverPort)
-	{
-		if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
-		{
-			SocketInfo& serverInfo = thisSocketInfo.RemoteSocketInfo.front();
-			
-			serverInfo.Addr.sin_family = AF_INET;
-			inet_pton(AF_INET, serverIP, &serverInfo.Addr.sin_addr);
-			serverInfo.Addr.sin_port = htons(serverPort);
-
-			return (connect(thisSocketInfo.SocketFD, (sockaddr*)&serverInfo.Addr, sizeof(sockaddr_in)) != SOCKET_ERROR);
-		}
-		else
-			return false;
-	}
-
 	//Check number of bytes waiting in the input buffer
-	inline const int& CheckReceivedBytes()
+	inline const int CheckReceivedBytes()
 	{
 		ioctlsocket(thisSocketInfo.SocketFD, FIONREAD, (u_long*)&recvBytes);
 		return recvBytes;
@@ -258,30 +279,16 @@ public:
 	  - targetPort: Port number of the receiver.
 	*/
 	template<typename T>
-	bool SendDataUDP(T* data, const size_t& dataSize, const char* targetIP, const uint16_t& targetPort)
+	bool SendUDP(T* data, const size_t& dataSize, const char* targetIP, const uint16_t& targetPort)
 	{
+		//NOTE: Using a templated type for the "data" argument since void* doesn't accept const types.
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
-			char* dataPtr = nullptr;
-
 			udpTargetAddr.sin_family = AF_INET;
-			inet_pton(AF_INET, targetIP, &udpTargetAddr.sin_addr);
+			inet_pton(udpTargetAddr.sin_family, targetIP, &udpTargetAddr.sin_addr);
 			udpTargetAddr.sin_port = htons(targetPort);
-
-			if (IsUnicodeString(data))
-			{
-				if (dataSize > txBuffer.size())
-					txBuffer.resize(dataSize + sizeof(T));
-
-				memset(txBuffer.data(), '\0', txBuffer.size());
-				memcpy(txBuffer.data(), data, dataSize);
-
-				dataPtr = (char*)txBuffer.data();
-			}
-			else
-				dataPtr = (char*)data;
 			
-			return (sendto(thisSocketInfo.SocketFD, dataPtr, (int)dataSize, 0, (sockaddr*)&udpTargetAddr, sizeof(sockaddr)) != SOCKET_ERROR);
+			return (sendto(thisSocketInfo.SocketFD, (char*)data, (int)dataSize, 0, (sockaddr*)&udpTargetAddr, sizeof(sockaddr)) != SOCKET_ERROR);
 		}
 		else
 			return false;
@@ -297,12 +304,12 @@ public:
 	  - senderIP:   The IP address of the sender.
 	  - senderPort: The sender's port number.
 	*/
-	int ReceiveDataUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort)
+	int ReceiveUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
 			int udpSenderLen		= sizeof(sockaddr);
-			SocketInfo& senderInfo	= thisSocketInfo.RemoteSocketInfo.front();
+			SocketInfo& senderInfo	= remoteSocketInfo.front();
 			
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -324,6 +331,8 @@ public:
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
 
+				ResolveHostName(senderInfo);
+
 				return recvBytes;
 			}
 			else
@@ -341,12 +350,12 @@ public:
 	  - dataSize: The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
 			      If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
 	*/
-	int ReceiveDataUDP(void* data, const size_t& dataSize)
+	int ReceiveUDP(void* data, const size_t& dataSize)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = thisSocketInfo.RemoteSocketInfo.front();
+			SocketInfo& senderInfo = remoteSocketInfo.front();
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -381,12 +390,12 @@ public:
 	  - senderPort: The sender's port number.
 	*/
 	template<typename T>
-	int ReceiveDataUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort)
+	int ReceiveUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = thisSocketInfo.RemoteSocketInfo.front();
+			SocketInfo& senderInfo = remoteSocketInfo.front();
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -399,6 +408,44 @@ public:
 			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
 			{
 				strData.assign((T*)rxBuffer.data());
+				ResolveHostName(senderInfo);
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - streamData: Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - senderIP:   The IP address of the sender.
+	  - senderPort: The sender's port number.
+	*/
+	template<typename T>
+	int ReceiveUDP(std::basic_iostream<T>& streamData, std::string& senderIP, uint16_t& senderPort)
+	{
+		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
+		{
+			int udpSenderLen = sizeof(sockaddr);
+			SocketInfo& senderInfo = remoteSocketInfo.front();
+
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
+
+			GetIPFromSockAddr(senderInfo);
+			senderIP = senderInfo.IPAddress;
+			GetPortFromSockAddr(senderInfo);
+			senderPort = senderInfo.Port;
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				streamData << (T*)rxBuffer.data();
+				ResolveHostName(senderInfo);
 				return recvBytes;
 			}
 			else
@@ -415,12 +462,12 @@ public:
 	  - strData: Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
 	*/
 	template<typename T>
-	int ReceiveDataUDP(std::basic_string<T>& strData)
+	int ReceiveUDP(std::basic_string<T>& strData)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = thisSocketInfo.RemoteSocketInfo.front();
+			SocketInfo& senderInfo = remoteSocketInfo.front();
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -437,6 +484,280 @@ public:
 			return 0;
 	}
 	
+	/*
+	Attempts to connect to a TCP server if this socket is a TCP client.
+	Returns the error code of the last operation. A value of 0 means connection was successful.
+	Arguments:
+	  - server: This argument accepts either a domain name or an IP address.
+	  - serverPort: The port number of the server to connect to.
+	*/
+	int ConnectToServerTCP(const char* server, const uint16_t& serverPort)
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
+		{
+			SocketInfo& serverInfo = remoteSocketInfo.front();
+
+			serverInfo.Addr.sin_family = AF_INET;
+			
+			snprintf(serverInfo.Service, sizeof(serverInfo.Service), "%d", serverPort);
+			
+			/*
+			Check if the "server" argument is a domain name or IP by calling inet_pton.
+			Return value of 1 refers to a valid IP address.
+			*/
+			if (inet_pton(serverInfo.Addr.sin_family, server, &serverInfo.Addr.sin_addr) != 1)
+			{
+				//Invalid IP address has been entered, treating it as a domain name.
+				addrinfo hints = {};
+				hints.ai_family		= AF_UNSPEC;
+				hints.ai_flags		= AI_CANONNAME;
+				hints.ai_socktype	= SOCK_STREAM;
+				hints.ai_protocol	= IPPROTO::IPPROTO_TCP;
+
+				addrinfo* addrRes = nullptr;
+				
+				if (getaddrinfo(server, serverInfo.Service, &hints, &addrRes) == 0)
+				{
+					if ((addrRes != nullptr) && (addrRes->ai_addr != nullptr))
+					{
+						switch (addrRes->ai_family)
+						{
+							case AF_INET:
+								serverInfo.Addr = *(sockaddr_in*)addrRes->ai_addr;							
+								break;
+							case AF_INET6:
+								serverInfo.Addr6 = *(sockaddr_in6*)addrRes->ai_addr;
+								break;
+						}
+					}
+					else
+						return GetSocketError;
+				}
+				else
+					return GetSocketError;
+
+				if (addrRes != nullptr)
+					freeaddrinfo(addrRes);
+			}
+			else
+			{
+				//Valid IP address has been entered.
+				serverInfo.Addr.sin_port = htons(serverPort);
+			}
+
+			GetIPFromSockAddr(serverInfo);
+			GetPortFromSockAddr(serverInfo);
+			ResolveHostName(serverInfo);
+
+			bool ret = (connect(thisSocketInfo.SocketFD, (sockaddr*)&serverInfo.Addr, sizeof(sockaddr)) != SOCKET_ERROR);
+			
+			if (!ret && (GetSocketError != ConnectingErrCode))
+				serverInfo.Reset();
+
+			connectedToServer = ret;
+		}
+		
+		return GetSocketError;
+	}
+
+	/*
+	NOTE: This will be a blocking call due to calling of getsockopt, so call this function asynchronously if you have to.
+	Return values:
+	  1:  Successful connection.
+	  0:  Timeout expired.
+	  -1: Connection failed.
+	*/
+	int CheckForConnectNonBlockTCP(const double& timeoutSec)
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
+		{
+			fd_set writeFD;
+			FD_ZERO(&writeFD);
+			FD_SET(thisSocketInfo.SocketFD, &writeFD);
+
+			timeval timeoutVal = { 0, 0 };
+			timeoutVal.tv_sec	= (long)timeoutSec;
+			timeoutVal.tv_usec	= (long)((timeoutSec - (double)timeoutVal.tv_sec) * 1000 * 1000);
+
+			int result = select((int)thisSocketInfo.SocketFD, nullptr, &writeFD, nullptr, &timeoutVal);
+
+			if (result > 0)	//Successful
+			{
+				//Check if this socket is writeable
+				int errCode = 0;
+				socklen_t errCodeLen = sizeof(errCode);
+
+				int canWrite = getsockopt(thisSocketInfo.SocketFD, SOL_SOCKET, SO_ERROR, (char*)&errCode, &errCodeLen);
+				connectedToServer = true;
+
+				return (canWrite == 0) ? 1 : canWrite;	//1 = success, SOCKET_ERROR = fail.
+			}
+			else if (result == 0) //timeout expired
+				return 0;
+			else
+				return SOCKET_ERROR;
+		}
+		else
+			return SOCKET_ERROR;
+	}
+
+	//Sets this socket into TCP listening mode, only if it was initialized as a TCP server.
+	bool StartListeningTCP()
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+			return (listen(thisSocketInfo.SocketFD, SOMAXCONN) != SOCKET_ERROR);
+		else
+			return false;
+	}
+
+	/*
+	Stops this socket from listening for incoming TCP connections, if this socket was initialized as a TCP server.
+	NOTE: This call will close this socket.
+	*/
+	bool StopListeningTCP()
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+			return CloseThisSocket();
+		else
+			return false;
+	}
+
+	//Closes the connection between this socket and a connected client by speciofying the client's Socket File Descriptor.
+	bool DropClientConnectionTCP(const size_t& sockFD)
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+		{
+			for (auto sockIter = remoteSocketInfo.begin(); sockIter != remoteSocketInfo.end(); sockIter++)
+			{
+				if (sockIter->SocketFD == sockFD)
+				{
+					closesocket(sockFD);
+					remoteSocketInfo.erase(sockIter);
+					break;
+				}
+			}
+
+			return true;
+		}
+		else
+			return false;
+	}
+
+	/*
+	Call this to send any data type to the connected TCP server.
+	NOTE: For string types, ensure that dataSize = stringlength + 1.
+	NOTE: For Unicode strings, ensure that dataSize = (stringlength + 1) * charsize.
+	Arguments:
+	  - data:       Pointer to the data to be sent.
+	  - dataSize:   Size of the data to send.
+	*/
+	template<typename T>
+	bool SendToServerTCP(T* data, const size_t& dataSize)
+	{
+		//NOTE: Using a templated type for the "data" argument since void* doesn't accept const types.
+		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+			return (send(thisSocketInfo.SocketFD, (char*)data, (int)dataSize, 0) != SOCKET_ERROR);
+		else
+			return false;
+	}
+
+	/*
+	Call this function if the expected data has a fixed size(like structs), or if you simply want to copy the data into a buffer.
+	Returns the number of bytes received.
+	Arguments:
+	  - data:     Pointer to where you would like to store the received data.
+	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	int ReceiveFromServerTCP(void* data, const size_t& maxSize)
+	{
+		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			SocketInfo& senderInfo = remoteSocketInfo.front();
+
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				//Check if all received data should be copied into the "data" argument without checking.
+				if (maxSize == SIZE_MAX)
+					memcpy(data, rxBuffer.data(), recvBytes);
+				else
+				{
+					//Check if received data size is the expected size.
+					if ((size_t)recvBytes <= maxSize)
+						memcpy(data, rxBuffer.data(), recvBytes);
+				}
+
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - data:     Pointer to where you would like to store the received data.
+	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	template<typename T>
+	int ReceiveFromServerTCP(std::basic_string<T>& strData)
+	{
+		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			SocketInfo& senderInfo = remoteSocketInfo.front();
+
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				strData.assign((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - data:     Pointer to where you would like to store the received data.
+	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	template<typename T>
+	int ReceiveFromServerTCP(std::basic_iostream<T>& streamData)
+	{
+		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			SocketInfo& senderInfo = remoteSocketInfo.front();
+
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				streamData << ((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
 
 #elif SOCKET_PLATFORM_UNIX
 	//Initialize socket
@@ -446,7 +767,7 @@ public:
 	}
 
 	//Close the socket
-	bool CloseSocket()
+	bool CloseThisSocket()
 	{
 		return (close(localSocket) == 0);
 	}
@@ -488,24 +809,29 @@ protected:
 		socket.Port = ntohs(socket.Addr.sin_port);
 	}
 
-	template<typename T>
-	inline bool IsUnicodeString(T* data)
+	inline bool ResolveHostName(SocketInfo& socket)
 	{
-		size_t type = typeid(T).hash_code();
+		memset(socket.Service, '\0', sizeof(socket.Service));
+		memset(socket.HostName, '\0', sizeof(socket.HostName));	
 
-		return (
-			(type == typeid(wchar_t).hash_code()) ||
-			(type == typeid(char16_t).hash_code()) ||
-			(type == typeid(char32_t).hash_code())
-			);
+		return (getnameinfo((sockaddr*)&socket.Addr, sizeof(sockaddr), socket.HostName, NI_MAXHOST, socket.Service, NI_MAXSERV, 0) == 0);
 	}
 
 private:
+	/*
+	RemoteSocketInfo is used to store the following based on the current configuration of this socket:
+		[UDP]: Info of the last sender from the last received message.
+		[TCP_CLIENT]: Info of the server this socket is connected to.
+		[TCP_SERVER]: Info of all clients currently connected to this socket.
+	*/
+	std::vector<SocketInfo> remoteSocketInfo;
+
 	LocalSocketInfo thisSocketInfo;
 	sockaddr_in		udpTargetAddr;
 	
 	std::vector<unsigned char> rxBuffer, txBuffer;
-	uint32_t	maxBufferSize = MAX_UDP_BUFFER_SIZE;
+	uint32_t maxBufferSize = MAX_UDP_BUFFER_SIZE;
 	int recvBytes = 0;
+	bool connectedToServer = false;
 };
 #endif //_NETSOCKET_H_
