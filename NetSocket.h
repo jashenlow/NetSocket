@@ -55,6 +55,7 @@
 constexpr uint16_t	BUFFER_DEFAULT_SIZE	= 4096;
 constexpr uint16_t	MAX_UDP_BUFFER_SIZE	= 65507;
 constexpr uint32_t	MAX_TCP_BUFFER_SIZE	= 1048576;
+constexpr uint32_t  DEFAULT_NUM_REMOTE	= 100;
 
 #ifdef SOCKET_PLATFORM_WINDOWS
 enum class WinsockError
@@ -81,10 +82,9 @@ public:
 	{
 		char HostName[NI_MAXHOST];
 		char Service[NI_MAXSERV];
-		size_t			SocketFD;
-		sockaddr_in		Addr;	//IPv4 Only
-		sockaddr_in6	Addr6;	//IPv6 Only
-		std::string		IPAddress;
+		char			IPAddress[INET_ADDRSTRLEN];
+		sockaddr_in		Addr;	//IPv4	
+		size_t			SocketFD;		
 		uint16_t		Port;
 
 		SocketInfo()
@@ -96,21 +96,41 @@ public:
 		{
 			memset(HostName, '\0', sizeof(HostName));
 			memset(Service, '\0', sizeof(Service));
-			SocketFD = 0;
-
+			memset(IPAddress, '\0', sizeof(char) * INET_ADDRSTRLEN);
+			
 			Addr.sin_family = AF_INET;
 			memset(&Addr.sin_addr, 0, sizeof(Addr.sin_addr));
 			Addr.sin_port = 0;
 			memset(Addr.sin_zero, '\0', sizeof(Addr.sin_zero));
-			
-			Addr6.sin6_family = AF_INET6;
-			memset(&Addr6.sin6_addr, 0, sizeof(Addr6.sin6_addr));
-			Addr6.sin6_port = 0;
-			Addr6.sin6_flowinfo = 0;
-			Addr6.sin6_scope_id = 0;
 
-			IPAddress.clear();
-			Port = 0;
+			SocketFD	= 0;
+			Port		= 0;
+		}
+
+		bool operator==(const SocketInfo& other)
+		{
+			return (
+				//(strcmp(HostName, other.HostName) == 0) &&
+				//(strcmp(Service, other.Service) == 0) &&
+				//(strcmp(IPAddress, other.IPAddress) == 0) &&
+				(Addr.sin_addr.s_addr == other.Addr.sin_addr.s_addr) &&
+				(Addr.sin_port == other.Addr.sin_port) &&
+				(SocketFD == other.SocketFD)// &&
+				//(Port == other.Port)
+				);
+		}
+
+		bool operator!=(const SocketInfo& other)
+		{
+			return (
+				//(strcmp(HostName, other.HostName) != 0) ||
+				//(strcmp(Service, other.Service) != 0) ||
+				//(strcmp(IPAddress, other.IPAddress) != 0) ||
+				(Addr.sin_addr.s_addr != other.Addr.sin_addr.s_addr) ||
+				(Addr.sin_port != other.Addr.sin_port) ||
+				(SocketFD != other.SocketFD)// ||
+				//(Port != other.Port)
+				);
 		}
 	};
 
@@ -151,17 +171,18 @@ public:
 		return remoteSocketInfo;
 	}
 
-	/*
-	Returns a value which determines if the specified socket is using IPv4 or IPv6.
-	Return values: AF_INET or AF_INET6.
-	*/
-	const uint16_t& GetIPVersion(const SocketInfo& socket) const
+	const uint32_t& GetMaxRemoteSockets() const
 	{
-		return thisSocketInfo.Addr.sin_family;
+		return maxRemoteSocketInfo;
+	}
+
+	void SetMaxRemoteSockets(const uint32_t& num)
+	{
+		maxRemoteSocketInfo = num;
 	}
 
 	//Returns the current hostname of the specified socket.
-	const char* GetHostName(const SocketInfo& socket)
+	const char* GetHostName(const SocketInfo& socket) const
 	{
 		return socket.HostName;
 	}
@@ -189,7 +210,7 @@ public:
 
 		//Set local socket details
 		thisSocketInfo.Blocking			= (unsigned long)isNonBlocking;
-		thisSocketInfo.IPAddress		= localIP;
+		snprintf(thisSocketInfo.IPAddress, INET_ADDRSTRLEN, "%s", localIP);
 		thisSocketInfo.Port				= localPort;
 		thisSocketInfo.Type				= type;
 		thisSocketInfo.Protocol			= (type == SocketType::UDP) ? IPPROTO::IPPROTO_UDP : IPPROTO::IPPROTO_TCP;
@@ -233,11 +254,11 @@ public:
 					{
 						for (auto& sockInfo : remoteSocketInfo)
 							closesocket(sockInfo.SocketFD);
+
+						remoteSocketInfo.clear();
 					}
 
-					remoteSocketInfo.clear();
-
-					if ((thisSocketInfo.Type == SocketType::UDP) || (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+					if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
 						remoteSocketInfo.resize(1);
 
 					//Get the hostname of this machine.
@@ -262,7 +283,7 @@ public:
 	}
 
 	//Check number of bytes waiting in the input buffer
-	inline const int CheckReceivedBytes()
+	inline const int& CheckReceivedBytes()
 	{
 		ioctlsocket(thisSocketInfo.SocketFD, FIONREAD, (u_long*)&recvBytes);
 		return recvBytes;
@@ -298,18 +319,19 @@ public:
 	Call this function if the expected data has a fixed size(like structs), or if you simply want to copy the data into a buffer.
 	Returns the number of bytes received.
 	Arguments:
-	  - data:       Pointer to where you would like to store the received data.
-	  - dataSize:   The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
-	                If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
-	  - senderIP:   The IP address of the sender.
-	  - senderPort: The sender's port number.
+	  - data:           Pointer to where you would like to store the received data.
+	  - dataSize:       The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+	                    If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	  - senderIP:       The IP address of the sender.
+	  - senderPort:     The sender's port number.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
 	*/
-	int ReceiveUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort)
+	int ReceiveUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
-			int udpSenderLen		= sizeof(sockaddr);
-			SocketInfo& senderInfo	= remoteSocketInfo.front();
+			int udpSenderLen = sizeof(sockaddr);
+			SocketInfo senderInfo;
 			
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -331,7 +353,14 @@ public:
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
 
-				ResolveHostName(senderInfo);
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						ResolveHostName(senderInfo);
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
 
 				return recvBytes;
 			}
@@ -346,16 +375,17 @@ public:
 	Call this function if the expected data has a fixed size(like structs), or if you simply want to copy the data into a buffer.
 	Returns the number of bytes received.
 	Arguments:
-	  - data:     Pointer to where you would like to store the received data.
-	  - dataSize: The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
-			      If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	  - data:           Pointer to where you would like to store the received data.
+	  - dataSize:       The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+			            If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
 	*/
-	int ReceiveUDP(void* data, const size_t& dataSize)
+	int ReceiveUDP(void* data, const size_t& dataSize, bool storeSenderInfo = false)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = remoteSocketInfo.front();
+			SocketInfo senderInfo;
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -372,6 +402,18 @@ public:
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
 
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						GetIPFromSockAddr(senderInfo);
+						GetPortFromSockAddr(senderInfo);
+						ResolveHostName(senderInfo);
+
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
+
 				return recvBytes;
 			}
 			else
@@ -385,17 +427,18 @@ public:
 	Call this function if the expected data is a normal ASCII string, or a Unicode string.
 	Returns the number of bytes received.
 	Arguments:
-	  - strData:    Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
-	  - senderIP:   The IP address of the sender.
-	  - senderPort: The sender's port number.
+	  - strData:        Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - senderIP:       The IP address of the sender.
+	  - senderPort:     The sender's port number.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort)
+	int ReceiveUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = remoteSocketInfo.front();
+			SocketInfo senderInfo;
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -408,7 +451,59 @@ public:
 			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
 			{
 				strData.assign((T*)rxBuffer.data());
-				ResolveHostName(senderInfo);
+				
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						ResolveHostName(senderInfo);
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
+
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - strData:        Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	*/
+	template<typename T>
+	int ReceiveUDP(std::basic_string<T>& strData, bool storeSenderInfo = false)
+	{
+		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
+		{
+			int udpSenderLen = sizeof(sockaddr);
+			SocketInfo senderInfo;
+
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				strData.assign((T*)rxBuffer.data());
+
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						GetIPFromSockAddr(senderInfo);
+						GetPortFromSockAddr(senderInfo);
+						ResolveHostName(senderInfo);
+
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
+
 				return recvBytes;
 			}
 			else
@@ -422,17 +517,18 @@ public:
 	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
 	Returns the number of bytes received.
 	Arguments:
-	  - streamData: Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - streamData: Reference to the stream variable used.
 	  - senderIP:   The IP address of the sender.
 	  - senderPort: The sender's port number.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_iostream<T>& streamData, std::string& senderIP, uint16_t& senderPort)
+	int ReceiveUDP(std::basic_iostream<T>& streamData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = remoteSocketInfo.front();
+			SocketInfo senderInfo;
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
@@ -445,7 +541,16 @@ public:
 			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
 			{
 				streamData << (T*)rxBuffer.data();
-				ResolveHostName(senderInfo);
+				
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						ResolveHostName(senderInfo);
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
+
 				return recvBytes;
 			}
 			else
@@ -456,25 +561,39 @@ public:
 	}
 
 	/*
-	Call this function if the expected data is a normal ASCII string, or a Unicode string.
+	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
 	Returns the number of bytes received.
 	Arguments:
-	  - strData: Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - streamData: Reference to the stream variable used.
+	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_string<T>& strData)
+	int ReceiveUDP(std::basic_iostream<T>& streamData, bool storeSenderInfo = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
 			int udpSenderLen = sizeof(sockaddr);
-			SocketInfo& senderInfo = remoteSocketInfo.front();
+			SocketInfo senderInfo;
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
-			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
+			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);	
 
 			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
 			{
-				strData.assign((T*)rxBuffer.data());
+				streamData << (T*)rxBuffer.data();
+
+				if (storeSenderInfo)
+				{
+					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
+					{
+						GetIPFromSockAddr(senderInfo);
+						GetPortFromSockAddr(senderInfo);
+						ResolveHostName(senderInfo);
+
+						CheckAndAppendSocketInfo(senderInfo);
+					}
+				}
+
 				return recvBytes;
 			}
 			else
@@ -495,6 +614,9 @@ public:
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
 		{
+			if (remoteSocketInfo.size() != 1)
+				remoteSocketInfo.resize(1);
+
 			SocketInfo& serverInfo = remoteSocketInfo.front();
 
 			serverInfo.Addr.sin_family = AF_INET;
@@ -519,17 +641,7 @@ public:
 				if (getaddrinfo(server, serverInfo.Service, &hints, &addrRes) == 0)
 				{
 					if ((addrRes != nullptr) && (addrRes->ai_addr != nullptr))
-					{
-						switch (addrRes->ai_family)
-						{
-							case AF_INET:
-								serverInfo.Addr = *(sockaddr_in*)addrRes->ai_addr;							
-								break;
-							case AF_INET6:
-								serverInfo.Addr6 = *(sockaddr_in6*)addrRes->ai_addr;
-								break;
-						}
-					}
+						serverInfo.Addr = *(sockaddr_in*)addrRes->ai_addr;							
 					else
 						return GetSocketError;
 				}
@@ -601,6 +713,116 @@ public:
 			return SOCKET_ERROR;
 	}
 
+	/*
+	Call this to send any data type to the connected TCP server.
+	NOTE: For string types, ensure that dataSize = stringlength + 1.
+	NOTE: For Unicode strings, ensure that dataSize = (stringlength + 1) * charsize.
+	Arguments:
+	  - data:       Pointer to the data to be sent.
+	  - dataSize:   Size of the data to send.
+	*/
+	template<typename T>
+	bool SendToServerTCP(T* data, const size_t& dataSize)
+	{
+		//NOTE: Using a templated type for the "data" argument since void* doesn't accept const types.
+		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+			return (send(thisSocketInfo.SocketFD, (char*)data, (int)dataSize, 0) != SOCKET_ERROR);
+		else
+			return false;
+	}
+
+	/*
+	Call this function if the expected data has a fixed size(like structs), or if you simply want to copy the data into a buffer.
+	Returns the number of bytes received.
+	Arguments:
+	  - data:     Pointer to where you would like to store the received data.
+	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	int ReceiveFromServerTCP(void* data, const size_t& maxSize)
+	{
+		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				//Check if all received data should be copied into the "data" argument without checking.
+				if (maxSize == SIZE_MAX)
+					memcpy(data, rxBuffer.data(), recvBytes);
+				else
+				{
+					//Check if received data size is the expected size.
+					if ((size_t)recvBytes <= maxSize)
+						memcpy(data, rxBuffer.data(), recvBytes);
+				}
+
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - strData:  Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
+	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	template<typename T>
+	int ReceiveFromServerTCP(std::basic_string<T>& strData)
+	{
+		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				strData.assign((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	/*
+	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
+	Returns the number of bytes received.
+	Arguments:
+	  - streamata: Reference to the stream variable used.
+	  - maxSize:   The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
+				   If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
+	*/
+	template<typename T>
+	int ReceiveFromServerTCP(std::basic_iostream<T>& streamData)
+	{
+		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				streamData << ((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
 	//Sets this socket into TCP listening mode, only if it was initialized as a TCP server.
 	bool StartListeningTCP()
 	{
@@ -632,7 +854,7 @@ public:
 				if (sockIter->SocketFD == sockFD)
 				{
 					closesocket(sockFD);
-					remoteSocketInfo.erase(sockIter);
+					sockIter = remoteSocketInfo.erase(sockIter);
 					break;
 				}
 			}
@@ -643,121 +865,8 @@ public:
 			return false;
 	}
 
-	/*
-	Call this to send any data type to the connected TCP server.
-	NOTE: For string types, ensure that dataSize = stringlength + 1.
-	NOTE: For Unicode strings, ensure that dataSize = (stringlength + 1) * charsize.
-	Arguments:
-	  - data:       Pointer to the data to be sent.
-	  - dataSize:   Size of the data to send.
-	*/
-	template<typename T>
-	bool SendToServerTCP(T* data, const size_t& dataSize)
-	{
-		//NOTE: Using a templated type for the "data" argument since void* doesn't accept const types.
-		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
-			return (send(thisSocketInfo.SocketFD, (char*)data, (int)dataSize, 0) != SOCKET_ERROR);
-		else
-			return false;
-	}
 
-	/*
-	Call this function if the expected data has a fixed size(like structs), or if you simply want to copy the data into a buffer.
-	Returns the number of bytes received.
-	Arguments:
-	  - data:     Pointer to where you would like to store the received data.
-	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
-				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
-	*/
-	int ReceiveFromServerTCP(void* data, const size_t& maxSize)
-	{
-		if ((data != nullptr) && connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
-		{
-			SocketInfo& senderInfo = remoteSocketInfo.front();
 
-			memset(rxBuffer.data(), '\0', rxBuffer.size());
-			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
-
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
-				//Check if all received data should be copied into the "data" argument without checking.
-				if (maxSize == SIZE_MAX)
-					memcpy(data, rxBuffer.data(), recvBytes);
-				else
-				{
-					//Check if received data size is the expected size.
-					if ((size_t)recvBytes <= maxSize)
-						memcpy(data, rxBuffer.data(), recvBytes);
-				}
-
-				return recvBytes;
-			}
-			else
-				return 0;
-		}
-		else
-			return 0;
-	}
-
-	/*
-	Call this function if the expected data is a normal ASCII string, or a Unicode string.
-	Returns the number of bytes received.
-	Arguments:
-	  - data:     Pointer to where you would like to store the received data.
-	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
-				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
-	*/
-	template<typename T>
-	int ReceiveFromServerTCP(std::basic_string<T>& strData)
-	{
-		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
-		{
-			SocketInfo& senderInfo = remoteSocketInfo.front();
-
-			memset(rxBuffer.data(), '\0', rxBuffer.size());
-			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
-
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
-				strData.assign((T*)rxBuffer.data());
-				return recvBytes;
-			}
-			else
-				return 0;
-		}
-		else
-			return 0;
-	}
-
-	/*
-	Call this function to append received data to a stream, and if the expected data is a normal ASCII string, or a Unicode string.
-	Returns the number of bytes received.
-	Arguments:
-	  - data:     Pointer to where you would like to store the received data.
-	  - maxSize:  The maximum expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
-				  If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
-	*/
-	template<typename T>
-	int ReceiveFromServerTCP(std::basic_iostream<T>& streamData)
-	{
-		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_CLIENT))
-		{
-			SocketInfo& senderInfo = remoteSocketInfo.front();
-
-			memset(rxBuffer.data(), '\0', rxBuffer.size());
-			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
-
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
-				streamData << ((T*)rxBuffer.data());
-				return recvBytes;
-			}
-			else
-				return 0;
-		}
-		else
-			return 0;
-	}
 
 #elif SOCKET_PLATFORM_UNIX
 	//Initialize socket
@@ -797,10 +906,7 @@ protected:
 	//Get an IP address of a socket in string representation
 	inline void GetIPFromSockAddr(SocketInfo& socket)
 	{
-		if (socket.IPAddress.size() != INET_ADDRSTRLEN)
-			socket.IPAddress.resize(INET_ADDRSTRLEN);
-
-		inet_ntop(AF_INET, &socket.Addr.sin_addr, &socket.IPAddress[0], INET_ADDRSTRLEN);
+		inet_ntop(AF_INET, &socket.Addr.sin_addr, socket.IPAddress, INET_ADDRSTRLEN);
 	}
 	
 	//Get the port number of a socket
@@ -817,6 +923,12 @@ protected:
 		return (getnameinfo((sockaddr*)&socket.Addr, sizeof(sockaddr), socket.HostName, NI_MAXHOST, socket.Service, NI_MAXSERV, 0) == 0);
 	}
 
+	inline void CheckAndAppendSocketInfo(const SocketInfo& socket)
+	{
+		if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), socket) == remoteSocketInfo.end())
+			remoteSocketInfo.emplace_back(socket);
+	}
+
 private:
 	/*
 	RemoteSocketInfo is used to store the following based on the current configuration of this socket:
@@ -825,7 +937,8 @@ private:
 		[TCP_SERVER]: Info of all clients currently connected to this socket.
 	*/
 	std::vector<SocketInfo> remoteSocketInfo;
-
+	uint32_t maxRemoteSocketInfo = DEFAULT_NUM_REMOTE;
+	
 	LocalSocketInfo thisSocketInfo;
 	sockaddr_in		udpTargetAddr;
 	

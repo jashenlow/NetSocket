@@ -22,13 +22,13 @@ int main(int argc, char** argv)
         WinsockError errorCode;
 
         errorCode = testSocket.Init(ipAddress.c_str(), 80, SocketType::TCP_CLIENT, false); //Change IP to console argument.
-
+        
         if (errorCode == WinsockError::OK)
         {
             const NetSocket::LocalSocketInfo& localInfo = testSocket.GetThisSocketInfo();
-
+            
             printf("\tLocal HostName: %s\n", localInfo.HostName);
-            printf("\tLocal IP: %s\n", localInfo.IPAddress.c_str());
+            printf("\tLocal IP: %s\n", localInfo.IPAddress);
             printf("\tLocal Port: %d\n", localInfo.Port);
 
             std::string strURL = "httpbin.org";
@@ -67,7 +67,7 @@ int main(int argc, char** argv)
                 const NetSocket::SocketInfo& serverInfo = testSocket.GetRemoteSocketInfo().front();
 
                 printf("\tHostName: %s\n", serverInfo.HostName);
-                printf("\tServer IP: %s\n", serverInfo.IPAddress.c_str());
+                printf("\tServer IP: %s\n", serverInfo.IPAddress);
                 printf("\tServer Port: %d\n", serverInfo.Port);
                 printf("\n");
 
@@ -163,7 +163,7 @@ int main(int argc, char** argv)
                         {
                             timeoutTimer += (10.0 / 1000.0);
 
-                            if (timeoutTimer >= 5.0)
+                            if (timeoutTimer >= 10.0)
                             {
                                 printf("Failed to get content. Exiting...\n");
                                 break;
