@@ -31,7 +31,7 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 #define GetSocketError WSAGetLastError()
-#define ConnectingErrCode WSAEWOULDBLOCK
+#define NonBlockIncomplete WSAEWOULDBLOCK
 #elif defined(__APPLE__) || defined(__linux__) || defined(__unix__)
 #define SOCKET_PLATFORM_UNIX
 
@@ -45,7 +45,7 @@
 #include <netdb.h>
 
 #define GetSocketError errno
-#define ConnectingErrCode EINPROGRESS
+#define NonBlockIncomplete EINPROGRESS
 #endif
 
 #include <iostream>
@@ -663,7 +663,7 @@ public:
 
 			bool ret = (connect(thisSocketInfo.SocketFD, (sockaddr*)&serverInfo.Addr, sizeof(sockaddr)) != SOCKET_ERROR);
 			
-			if (!ret && (GetSocketError != ConnectingErrCode))
+			if (!ret && (GetSocketError != NonBlockIncomplete))
 				serverInfo.Reset();
 
 			connectedToServer = ret;
@@ -839,12 +839,12 @@ public:
 	bool StopListeningTCP()
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
-			return CloseThisSocket();
+			return (closesocket(thisSocketInfo.SocketFD) != SOCKET_ERROR);
 		else
 			return false;
 	}
 
-	//Closes the connection between this socket and a connected client by speciofying the client's Socket File Descriptor.
+	//Closes the connection between this socket and a connected client by specifying the client's Socket File Descriptor.
 	bool DropClientConnectionTCP(const size_t& sockFD)
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
@@ -865,28 +865,103 @@ public:
 			return false;
 	}
 
+	//Accepts and resolves information of an incoming client connection.
+	bool AcceptIncomingClient()
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+		{
+			SocketInfo newSocket;
+			int addrSize = sizeof(newSocket.Addr);
 
+			newSocket.SocketFD = accept(thisSocketInfo.SocketFD, (sockaddr*)&newSocket.Addr, &addrSize);
 
+			if (newSocket.SocketFD != INVALID_SOCKET)
+			{
+				GetIPFromSockAddr(newSocket);
+				GetPortFromSockAddr(newSocket);
+				ResolveHostName(newSocket);
+
+				CheckAndAppendSocketInfo(newSocket);
+
+				return true;
+			}
+			else
+				return false;
+		}
+		else
+			return false;
+	}
+
+	int ReceiveFromClientTCP(const SocketInfo& clientSocket, void* data, const size_t& maxSize)
+	{
+		if ((data != nullptr) && (thisSocketInfo.Type == SocketType::TCP_SERVER))
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				//Check if all received data should be copied into the "data" argument without checking.
+				if (maxSize == SIZE_MAX)
+					memcpy(data, rxBuffer.data(), recvBytes);
+				else
+				{
+					//Check if received data size is the expected size.
+					if ((size_t)recvBytes <= maxSize)
+						memcpy(data, rxBuffer.data(), recvBytes);
+				}
+
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	template<typename T>
+	int ReceiveFromClientTCP(const SocketInfo& clientSocket, std::basic_string<T>& strData)
+	{
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				strData.assign((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
+
+	template<typename T>
+	int ReceiveFromClientTCP(const SocketInfo& clientSocket, std::basic_iostream<T>& streamData)
+	{
+		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_SERVER))
+		{
+			memset(rxBuffer.data(), '\0', rxBuffer.size());
+			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
+
+			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			{
+				streamData << ((T*)rxBuffer.data());
+				return recvBytes;
+			}
+			else
+				return 0;
+		}
+		else
+			return 0;
+	}
 
 #elif SOCKET_PLATFORM_UNIX
-	//Initialize socket
-	uint16_t Init(const char* localIP, const uint16_t& localPort, const SocketType& type, const bool& isNonBlocking)
-	{
-		//TODO
-	}
-
-	//Close the socket
-	bool CloseThisSocket()
-	{
-		return (close(localSocket) == 0);
-	}
-
-	//Check number of bytes waiting in the input buffer
-	inline uint16_t CheckReceivedBytes()
-	{
-		ioctl(localSocket, FIONREAD, &recvBytes);
-		return recvBytes;
-	}
+	//TODO
 #endif
 
 protected:

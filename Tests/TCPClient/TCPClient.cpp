@@ -36,7 +36,7 @@ int main(int argc, char** argv)
             bool isConnected = false;
             int errConnect = testSocket.ConnectToServerTCP(strURL.c_str(), 80);
 
-            if (errConnect == ConnectingErrCode)
+            if (errConnect == NonBlockIncomplete)
             {
                 int errWaitConnect = testSocket.CheckForConnectNonBlockTCP(2.0);
 
