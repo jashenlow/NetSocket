@@ -7,6 +7,8 @@
 
 #include <thread>
 
+constexpr const char* URL = "httpbin.org";
+
 int main(int argc, char** argv)
 {
     //_setmode(_fileno(stdout), _O_U16TEXT); //To set console in unicode.
@@ -18,53 +20,51 @@ int main(int argc, char** argv)
     //Check for empty string
     if (!ipAddress.empty())
     {
-        NetSocket testSocket;
+        NetSocket thisSocket;
         WinsockError errorCode;
 
-        errorCode = testSocket.Init(ipAddress.c_str(), 80, SocketType::TCP_CLIENT, false); //Change IP to console argument.
+        errorCode = thisSocket.Init(ipAddress.c_str(), 80, SocketType::TCP_CLIENT, true);
         
         if (errorCode == WinsockError::OK)
         {
-            const NetSocket::LocalSocketInfo& localInfo = testSocket.GetThisSocketInfo();
+            const NetSocket::LocalSocketInfo& localInfo = thisSocket.GetThisSocketInfo();
             
             printf("\tLocal HostName: %s\n", localInfo.HostName);
             printf("\tLocal IP: %s\n", localInfo.IPAddress);
             printf("\tLocal Port: %d\n", localInfo.Port);
 
-            std::string strURL = "httpbin.org";
-
             bool isConnected = false;
-            int errConnect = testSocket.ConnectToServerTCP(strURL.c_str(), 80);
+            int errConnect = thisSocket.ConnectToServerTCP(URL, 80);
 
             if (errConnect == NonBlockIncomplete)
             {
-                int errWaitConnect = testSocket.CheckForConnectNonBlockTCP(2.0);
+                int errWaitConnect = thisSocket.CheckForConnectNonBlockTCP(2.0);
 
                 switch (errWaitConnect)
                 {
                     case 1:
-                        printf("Connected to %s\n", strURL.c_str());
+                        printf("Connected to %s\n", URL);
                         isConnected = true;
                         break;
                     case 0:
-                        printf("Connection to %s timeout expired.\n", strURL.c_str());
+                        printf("Connection to %s timeout expired.\n", URL);
                         break;
                     case SOCKET_ERROR:
-                        printf("Failed to connect to %s\n", strURL.c_str());
+                        printf("Failed to connect to %s\n", URL);
                         break;
                 }
             }
             else if (errConnect == 0)
             {
                 isConnected = true;
-                printf("Connected to %s\n", strURL.c_str());
+                printf("Connected to %s\n", URL);
             }
             else
-                printf("Connection to %s failed.\n", strURL.c_str());
+                printf("Connection to %s failed.\n", URL);
 
             if (isConnected)
             {
-                const NetSocket::SocketInfo& serverInfo = testSocket.GetRemoteSocketInfo().front();
+                const NetSocket::SocketInfo& serverInfo = thisSocket.GetRemoteSocketInfo().front();
 
                 printf("\tHostName: %s\n", serverInfo.HostName);
                 printf("\tServer IP: %s\n", serverInfo.IPAddress);
@@ -75,10 +75,12 @@ int main(int argc, char** argv)
 
                 std::string request;
                 request += "GET / HTTP/1.1\r\n";
-                request += "Host: " + strURL + "\r\n";
+                request += "Host: ";
+                request += URL;
+                request += "\r\n";
                 request += "Connection: close\r\n\r\n";
 
-                if (testSocket.SendToServerTCP(request.c_str(), request.length() + 1))
+                if (thisSocket.SendToServerTCP(request.c_str(), request.length() + 1))
                 {
                     constexpr const char* RESP_HEADER_END = "\r\n";
                     int recvBytes = 0;
@@ -91,7 +93,7 @@ int main(int argc, char** argv)
                     //Read response header
                     while (recvBytes <= 0)
                     {
-                        recvBytes = testSocket.ReceiveFromServerTCP(ss);
+                        recvBytes = thisSocket.ReceiveFromServerTCP(ss);
 
                         if (recvBytes > 0)
                         {
@@ -157,7 +159,7 @@ int main(int argc, char** argv)
 
                     while (contentStr.length() != contentLength)
                     {
-                        recvBytes = testSocket.ReceiveFromServerTCP(contentStr);
+                        recvBytes = thisSocket.ReceiveFromServerTCP(contentStr);
 
                         if (contentStr.length() != contentLength)
                         {
@@ -182,7 +184,7 @@ int main(int argc, char** argv)
         else
             printf("Error initializing socket.\n");
 
-        testSocket.CloseThisSocket();
+        thisSocket.CloseThisSocket();
         system("pause");
     }
     else
