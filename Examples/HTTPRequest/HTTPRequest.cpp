@@ -80,7 +80,7 @@ int main(int argc, char** argv)
                 request += "\r\n";
                 request += "Connection: close\r\n\r\n";
 
-                if (thisSocket.SendToServerTCP(request.c_str(), request.length() + 1))
+                if (thisSocket.SendToServerTCP(request.c_str(), (request.length() + 1) * sizeof(request[0])))
                 {
                     constexpr const char* RESP_HEADER_END = "\r\n";
                     int recvBytes = 0;

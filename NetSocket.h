@@ -70,6 +70,7 @@ enum class WinsockError
 
 enum class SocketType
 {
+	NONE,
 	UDP,
 	TCP_CLIENT,
 	TCP_SERVER
@@ -91,7 +92,7 @@ public:
 		{
 			Reset();
 		}
-
+		
 		void Reset()
 		{
 			memset(HostName, '\0', sizeof(HostName));
@@ -136,9 +137,17 @@ public:
 
 	struct LocalSocketInfo : SocketInfo
 	{
-		SocketType	Type		= SocketType::UDP;
-		IPPROTO		Protocol	= IPPROTO::IPPROTO_UDP;
-		unsigned long Blocking	= 0;	//0 = Non-blocking, 1 = blocking.	
+		SocketType		Type;
+		IPPROTO			Protocol;
+		unsigned long	Blocking;	//0 = Blocking, 1 = Non-Blocking.
+
+		LocalSocketInfo()
+		{
+			Reset();
+			Type		= SocketType::NONE;
+			Protocol	= IPPROTO::IPPROTO_UDP;
+			Blocking	= 0;	//0 = Blocking, 1 = Non-Blocking.
+		}
 	};
 
 	//Socket Constructor
@@ -159,8 +168,19 @@ public:
 		CloseThisSocket();
 	}
 
+	//Return true if this socket has been initialized already.
+	bool IsInitialized()
+	{
+		return (
+			(thisSocketInfo.Type != SocketType::NONE) &&
+			(thisSocketInfo.IPAddress[0] != '\0') &&
+			(thisSocketInfo.Port != 0) &&
+			(thisSocketInfo.SocketFD != 0)
+			);
+	}
+
 	//Get all info about this socket
-	const LocalSocketInfo& GetThisSocketInfo() const
+	const LocalSocketInfo& GetThisSocketInfo()
 	{
 		return thisSocketInfo;
 	}
@@ -274,10 +294,15 @@ public:
 	}
 
 	//Close the socket
-	bool CloseThisSocket() const
+	bool CloseThisSocket()
 	{
-		if (closesocket(thisSocketInfo.SocketFD) != SOCKET_ERROR)
+		if (IsInitialized())
+		{
+			shutdown(thisSocketInfo.SocketFD, SD_BOTH);
+			closesocket(thisSocketInfo.SocketFD);
+			thisSocketInfo = LocalSocketInfo();
 			return (WSACleanup() == 0);
+		}
 		else
 			return false;
 	}
@@ -285,10 +310,34 @@ public:
 	//Check number of bytes waiting in the input buffer
 	inline const int& CheckReceivedBytes()
 	{
-		ioctlsocket(thisSocketInfo.SocketFD, FIONREAD, (u_long*)&recvBytes);
-		return recvBytes;
+		if (IsInitialized())
+		{
+			ioctlsocket(thisSocketInfo.SocketFD, FIONREAD, (u_long*)&recvBytes);
+			return recvBytes;
+		}
+		else
+			return 0;
 	}
 	
+	bool DropClientUDP(char* clientIP)
+	{
+		if (thisSocketInfo.Type == SocketType::UDP)
+		{
+			for (auto sockIter = remoteSocketInfo.begin(); sockIter != remoteSocketInfo.end(); sockIter++)
+			{
+				if (strcmp(sockIter->IPAddress, clientIP) == 0)
+				{
+					sockIter = remoteSocketInfo.erase(sockIter);
+					break;
+				}
+			}
+
+			return true;
+		}
+		else
+			return false;
+	}
+
 	/*
 	Call this to send any data type through the network.
 	NOTE: For string types, ensure that dataSize = stringlength + 1.
@@ -335,14 +384,14 @@ public:
 			
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
-			
-			GetIPFromSockAddr(senderInfo);
-			senderIP = senderInfo.IPAddress;
-			GetPortFromSockAddr(senderInfo);
-			senderPort = senderInfo.Port;
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
+				GetIPFromSockAddr(senderInfo);
+				senderIP = senderInfo.IPAddress;
+				GetPortFromSockAddr(senderInfo);
+				senderPort = senderInfo.Port;
+
 				//Check if all received data should be copied into the "data" argument without checking.
 				if (dataSize == SIZE_MAX)
 					memcpy(data, rxBuffer.data(), recvBytes);
@@ -360,12 +409,10 @@ public:
 						ResolveHostName(senderInfo);
 						CheckAndAppendSocketInfo(senderInfo);
 					}
-				}
-
-				return recvBytes;
+				}	
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -390,7 +437,7 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
 				//Check if all received data should be copied into the "data" argument without checking.
 				if (dataSize == SIZE_MAX)
@@ -412,12 +459,10 @@ public:
 
 						CheckAndAppendSocketInfo(senderInfo);
 					}
-				}
-
-				return recvBytes;
+				}	
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -442,16 +487,16 @@ public:
 
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
-			
-			GetIPFromSockAddr(senderInfo);
-			senderIP = senderInfo.IPAddress;
-			GetPortFromSockAddr(senderInfo);
-			senderPort = senderInfo.Port;
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
+				GetIPFromSockAddr(senderInfo);
+				senderIP = senderInfo.IPAddress;
+				GetPortFromSockAddr(senderInfo);
+				senderPort = senderInfo.Port;
+
 				strData.assign((T*)rxBuffer.data());
-				
+
 				if (storeSenderInfo)
 				{
 					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
@@ -460,11 +505,9 @@ public:
 						CheckAndAppendSocketInfo(senderInfo);
 					}
 				}
-
-				return recvBytes;
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -488,7 +531,7 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
 				strData.assign((T*)rxBuffer.data());
 
@@ -502,12 +545,10 @@ public:
 
 						CheckAndAppendSocketInfo(senderInfo);
 					}
-				}
-
-				return recvBytes;
+				}	
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -533,13 +574,13 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);
 
-			GetIPFromSockAddr(senderInfo);
-			senderIP = senderInfo.IPAddress;
-			GetPortFromSockAddr(senderInfo);
-			senderPort = senderInfo.Port;
-
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
+				GetIPFromSockAddr(senderInfo);
+				senderIP = senderInfo.IPAddress;
+				GetPortFromSockAddr(senderInfo);
+				senderPort = senderInfo.Port;
+
 				streamData << (T*)rxBuffer.data();
 				
 				if (storeSenderInfo)
@@ -549,12 +590,10 @@ public:
 						ResolveHostName(senderInfo);
 						CheckAndAppendSocketInfo(senderInfo);
 					}
-				}
-
-				return recvBytes;
+				}	
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -578,7 +617,7 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recvfrom(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0, (sockaddr*)&senderInfo.Addr, &udpSenderLen);	
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
 				streamData << (T*)rxBuffer.data();
 
@@ -592,12 +631,10 @@ public:
 
 						CheckAndAppendSocketInfo(senderInfo);
 					}
-				}
-
-				return recvBytes;
+				}	
 			}
-			else
-				return 0;
+
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -746,7 +783,7 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
 				//Check if all received data should be copied into the "data" argument without checking.
 				if (maxSize == SIZE_MAX)
@@ -757,11 +794,9 @@ public:
 					if ((size_t)recvBytes <= maxSize)
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
-
-				return recvBytes;
 			}
-			else
-				return 0;
+				
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -783,13 +818,10 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
+			if (recvBytes > 0)
 				strData.assign((T*)rxBuffer.data());
-				return recvBytes;
-			}
-			else
-				return 0;
+				
+			return recvBytes;
 		}
 		else
 			return 0;
@@ -811,23 +843,27 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(thisSocketInfo.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
+			if (recvBytes > 0)
 				streamData << ((T*)rxBuffer.data());
+
 				return recvBytes;
-			}
-			else
-				return 0;
 		}
 		else
 			return 0;
 	}
 
 	//Sets this socket into TCP listening mode, only if it was initialized as a TCP server.
-	bool StartListeningTCP()
+	//Set maxInQueue to SOMAXCONN for the maximum number.
+	bool StartListeningTCP(const int& maxInQueue)
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
-			return (listen(thisSocketInfo.SocketFD, SOMAXCONN) != SOCKET_ERROR);
+		{
+			if (maxInQueue > 0)
+				return (listen(thisSocketInfo.SocketFD, maxInQueue) != SOCKET_ERROR);
+			else
+				return false;
+		}
+			
 		else
 			return false;
 	}
@@ -865,22 +901,43 @@ public:
 			return false;
 	}
 
+	/*TCP_SERVER: Closes the connection between this socket and all connected clients.
+	  UDP: Erases all stored remote sockets. Call this if this socket is functioning as a UDP server.
+	*/
+	bool DropAllClients()
+	{
+		if ((thisSocketInfo.Type == SocketType::TCP_SERVER) || (thisSocketInfo.Type == SocketType::UDP))
+		{
+			if (thisSocketInfo.Type == SocketType::TCP_SERVER)
+			{
+				for (auto& sock : remoteSocketInfo)
+					closesocket(sock.SocketFD);
+			}
+
+			remoteSocketInfo.clear();
+			return true;
+		}
+		else
+			return false;
+	}
+
 	//Accepts and resolves information of an incoming client connection.
-	bool AcceptIncomingClient()
+	bool AcceptIncomingClientTCP()
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
 		{
 			SocketInfo newSocket;
 			int addrSize = sizeof(newSocket.Addr);
 
-			newSocket.SocketFD = accept(thisSocketInfo.SocketFD, (sockaddr*)&newSocket.Addr, &addrSize);
+			int result = (int)accept(thisSocketInfo.SocketFD, (sockaddr*)&newSocket.Addr, &addrSize);
 
-			if (newSocket.SocketFD != INVALID_SOCKET)
+			if ((result != SOCKET_ERROR) && (result != INVALID_SOCKET))
 			{
+				newSocket.SocketFD = result;
 				GetIPFromSockAddr(newSocket);
 				GetPortFromSockAddr(newSocket);
 				ResolveHostName(newSocket);
-
+				
 				CheckAndAppendSocketInfo(newSocket);
 
 				return true;
@@ -892,6 +949,24 @@ public:
 			return false;
 	}
 
+	/*
+	Call this to send any data type to the connected TCP client.
+	NOTE: For string types, ensure that dataSize = stringlength + 1.
+	NOTE: For Unicode strings, ensure that dataSize = (stringlength + 1) * charsize.
+	Arguments:
+	  - data:       Pointer to the data to be sent.
+	  - dataSize:   Size of the data to send.
+	*/
+	template<typename T>
+	bool SendToClientTCP(const size_t& clientSockFD, T* data, const size_t& dataSize)
+	{
+		//NOTE: Using a templated type for the "data" argument since void* doesn't accept const types.
+		if ((data != nullptr) && (thisSocketInfo.Type == SocketType::TCP_SERVER))
+			return (send(clientSockFD, (char*)data, (int)dataSize, 0) != SOCKET_ERROR);
+		else
+			return false;
+	}
+
 	int ReceiveFromClientTCP(const SocketInfo& clientSocket, void* data, const size_t& maxSize)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Type == SocketType::TCP_SERVER))
@@ -899,7 +974,7 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
+			if (recvBytes > 0)
 			{
 				//Check if all received data should be copied into the "data" argument without checking.
 				if (maxSize == SIZE_MAX)
@@ -910,11 +985,9 @@ public:
 					if ((size_t)recvBytes <= maxSize)
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
-
-				return recvBytes;
 			}
-			else
-				return 0;
+
+			return recvBytes;	//-1 means no data received, 0 means client has disconnected.
 		}
 		else
 			return 0;
@@ -928,13 +1001,10 @@ public:
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
+			if (recvBytes > 0)
 				strData.assign((T*)rxBuffer.data());
-				return recvBytes;
-			}
-			else
-				return 0;
+
+			return recvBytes;	//-1 means no data received, 0 means client has disconnected.
 		}
 		else
 			return 0;
@@ -943,18 +1013,15 @@ public:
 	template<typename T>
 	int ReceiveFromClientTCP(const SocketInfo& clientSocket, std::basic_iostream<T>& streamData)
 	{
-		if (connectedToServer && (thisSocketInfo.Type == SocketType::TCP_SERVER))
+		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
 		{
 			memset(rxBuffer.data(), '\0', rxBuffer.size());
 			recvBytes = recv(clientSocket.SocketFD, (char*)rxBuffer.data(), (int)rxBuffer.size(), 0);
 
-			if ((recvBytes > 0) && (recvBytes != SOCKET_ERROR))
-			{
+			if (recvBytes > 0)
 				streamData << ((T*)rxBuffer.data());
-				return recvBytes;
-			}
-			else
-				return 0;
+
+			return recvBytes;	//-1 means no data received, 0 means client has disconnected.
 		}
 		else
 			return 0;
@@ -1007,7 +1074,7 @@ protected:
 private:
 	/*
 	RemoteSocketInfo is used to store the following based on the current configuration of this socket:
-		[UDP]: Info of the last sender from the last received message.
+		[UDP]: Info of one, or all clients currently connected to this socket, if the user chooses to store the info.
 		[TCP_CLIENT]: Info of the server this socket is connected to.
 		[TCP_SERVER]: Info of all clients currently connected to this socket.
 	*/
