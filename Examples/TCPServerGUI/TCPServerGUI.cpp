@@ -51,7 +51,7 @@ void TCPServerApp::AddDialogClient(const NetSocket::SocketInfo& client, const wc
 	displayStr += ((displayName == nullptr) || (displayName[0] == '\0')) ? L"(empty)" : displayName;
 	displayStr += L"\t\t";
 	displayStr += CA2CT(client.IPAddress);
-	displayStr += L"\t\t";
+	displayStr += L"\t";
 	displayStr += CA2CT(client.HostName);
 
 	dispMutex.lock();
@@ -93,7 +93,7 @@ void TCPServerApp::UpdateDialogClient(const NetSocket::SocketInfo& client, const
 		displayStr += newDisplayName;
 		displayStr += L"\t\t";
 		displayStr += CA2CT(client.IPAddress);
-		displayStr += L"\t\t";
+		displayStr += L"\t";
 		displayStr += CA2CT(client.HostName);
 
 		uiCtrl.Clients->InsertString(index, displayStr.c_str());
@@ -202,7 +202,7 @@ inline void TCPServerApp::AcceptIncomingClients(TCPServerApp* appInst)
 	{
 		if (serverSocket.AcceptIncomingClientTCP())
 		{
-			NetSocket::SocketInfo newClient = serverSocket.GetRemoteSocketInfo().back(); 
+			NetSocket::SocketInfo newClient = serverSocket.GetRemoteSocketInfo().back();
 			bool isDuplicate = false;
 			
 			//Delete any thread objects that aren't running.

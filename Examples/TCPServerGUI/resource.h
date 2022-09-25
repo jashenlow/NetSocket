@@ -5,9 +5,7 @@
 #define IDD_TCPSERVERGUI_DIALOG         102
 #define IDR_MAINFRAME                   128
 #define LBL_IPADDRESS                   1000
-#define LBL_PORT                        1001
 #define EC_IPADDRESS                    1002
-#define EC_PORT                         1003
 #define BTN_STARTSERVER                 1004
 #define BTN_STOPSERVER                  1005
 #define LBL_CLIENTS                     1006

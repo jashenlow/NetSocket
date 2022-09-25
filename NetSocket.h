@@ -26,7 +26,9 @@
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(_WIN64) || defined(__NT__)
 #define SOCKET_PLATFORM_WINDOWS
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <WS2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -99,10 +101,7 @@ public:
 			memset(Service, '\0', sizeof(Service));
 			memset(IPAddress, '\0', sizeof(char) * INET_ADDRSTRLEN);
 			
-			Addr.sin_family = AF_INET;
-			memset(&Addr.sin_addr, 0, sizeof(Addr.sin_addr));
-			Addr.sin_port = 0;
-			memset(Addr.sin_zero, '\0', sizeof(Addr.sin_zero));
+			Addr.sin_family = { 0 };
 
 			SocketFD	= 0;
 			Port		= 0;
@@ -927,8 +926,8 @@ public:
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
 		{
 			SocketInfo newSocket;
-			int addrSize = sizeof(newSocket.Addr);
-
+			socklen_t addrSize = sizeof(newSocket.Addr);
+			
 			int result = (int)accept(thisSocketInfo.SocketFD, (sockaddr*)&newSocket.Addr, &addrSize);
 
 			if ((result != SOCKET_ERROR) && (result != INVALID_SOCKET))
@@ -1048,7 +1047,7 @@ protected:
 	//Get an IP address of a socket in string representation
 	inline void GetIPFromSockAddr(SocketInfo& socket)
 	{
-		inet_ntop(AF_INET, &socket.Addr.sin_addr, socket.IPAddress, INET_ADDRSTRLEN);
+		const char* retStr = inet_ntop(AF_INET, &socket.Addr.sin_addr, socket.IPAddress, INET_ADDRSTRLEN);
 	}
 	
 	//Get the port number of a socket
@@ -1061,7 +1060,7 @@ protected:
 	{
 		memset(socket.Service, '\0', sizeof(socket.Service));
 		memset(socket.HostName, '\0', sizeof(socket.HostName));	
-
+		
 		return (getnameinfo((sockaddr*)&socket.Addr, sizeof(sockaddr), socket.HostName, NI_MAXHOST, socket.Service, NI_MAXSERV, 0) == 0);
 	}
 

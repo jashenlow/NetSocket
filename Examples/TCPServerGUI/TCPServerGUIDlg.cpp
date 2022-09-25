@@ -123,7 +123,6 @@ void CTCPServerGUIDlg::OnCancel()
 inline void CTCPServerGUIDlg::SetUIControls()
 {
 	p_App->UIControls()->IPAddress		= (CIPAddressCtrl*)GetDlgItem(EC_IPADDRESS);
-	p_App->UIControls()->Port			= (CEdit*)GetDlgItem(EC_PORT);
 	p_App->UIControls()->Clients		= (CListBox*)GetDlgItem(LB_CLIENTS);
 	p_App->UIControls()->Messages		= (CListBox*)GetDlgItem(LB_MESSAGES);
 	p_App->UIControls()->StartServer	= (CButton*)GetDlgItem(BTN_STARTSERVER);
@@ -133,7 +132,6 @@ inline void CTCPServerGUIDlg::SetUIControls()
 inline void CTCPServerGUIDlg::InitUIControls()
 {
 	p_App->UIControls()->IPAddress->SetWindowText(L"0.0.0.0");
-	p_App->UIControls()->Port->SetWindowText(L"0");
 	p_App->UIControls()->StopServer->EnableWindow(false);
 }
 
@@ -154,42 +152,34 @@ inline void CTCPServerGUIDlg::StdStringToCString(const std::string& stdStr, CStr
 void CTCPServerGUIDlg::OnBnClickedStartserver()
 {
 	NetSocket* socket = p_App->GetSocket();
-	
+
 	if (socket->IsInitialized())
 		socket->CloseThisSocket();
 
 	//Get IP Address and port from UI controls
 	CString ipAddrCStr, portCStr;
 	std::string ipAddrStr;
-	uint16_t port = 0;
-	
+
 	p_App->UIControls()->IPAddress->GetWindowText(ipAddrCStr);
 	CStringToStdString(ipAddrCStr, ipAddrStr);
-	p_App->UIControls()->Port->GetWindowText(portCStr);
-	port = (uint16_t)_wtoi(portCStr);
-	
-	if (port == 0)
-		PrintMessage(L"Invalid Port 0.");
-	else
+
+	PrintMessage(L"Initializing server socket...");
+
+	WinsockError initErr = socket->Init(ipAddrStr.c_str(), SERVER_PORT, SocketType::TCP_SERVER/*, true*/);
+
+	if (initErr == WinsockError::OK)
 	{
-		PrintMessage(L"Initializing server socket...");
+		PrintMessage(L"Server socket initialized successfully.");
+		PrintMessage(L"----------------------------------------------------------------");
+		socket->StartListeningTCP(MAX_PENDING_CLIENTS);
+		p_App->LaunchAcceptingThread();
 
-		WinsockError initErr = socket->Init(ipAddrStr.c_str(), port, SocketType::TCP_SERVER/*, true*/);
-
-		if (initErr == WinsockError::OK)
-		{
-			PrintMessage(L"Server socket initialized successfully.");
-			PrintMessage(L"----------------------------------------------------------------");
-			socket->StartListeningTCP(MAX_PENDING_CLIENTS);
-			p_App->LaunchAcceptingThread();
-
-			PrintMessage(L"Listening for connections...");
-			p_App->UIControls()->StartServer->EnableWindow(false);
-			p_App->UIControls()->StopServer->EnableWindow(true);
-		}
-		else
-			PrintMessage((L"Socket initialization failed with error code " + std::to_wstring(GetSocketError)).c_str());
+		PrintMessage(L"Listening for connections...");
+		p_App->UIControls()->StartServer->EnableWindow(false);
+		p_App->UIControls()->StopServer->EnableWindow(true);
 	}
+	else
+		PrintMessage((L"Socket initialization failed with error code " + std::to_wstring(GetSocketError)).c_str());
 }
 
 

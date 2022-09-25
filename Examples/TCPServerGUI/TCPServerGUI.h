@@ -23,6 +23,7 @@
 // See TCPServerGUI.cpp for the implementation of this class
 //
 
+#define SERVER_PORT 28800
 #define MAX_PENDING_CLIENTS 10
 #define MAX_NUM_CLIENTS 10
 constexpr const wchar_t* PREFIX_DISPNAME	= L"displayname=";
@@ -34,7 +35,6 @@ constexpr const wchar_t	DELIM				= L'|';
 struct AppUIControls
 {
 	CIPAddressCtrl* IPAddress	= nullptr;
-	CEdit*			Port		= nullptr;
 	CListBox*		Clients		= nullptr;
 	CListBox*		Messages	= nullptr;
 	CButton*		StartServer = nullptr;

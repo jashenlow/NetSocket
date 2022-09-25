@@ -23,6 +23,7 @@
 #ifndef _NETUTIL_H_
 #define _NETUTIL_H_
 
+#include <typeinfo>
 #include <string>
 
 /*
@@ -72,12 +73,18 @@ public:
 			return false;
 	}
 
+	template<typename T>
+	static size_t GetStringSizeBytes(const std::basic_string<T>& str)
+	{
+		return (str.length() + 1) * sizeof(T);
+	}
+
 private:
 	NetUtil() {}
 	~NetUtil() {}
 
 	template<typename T>
-	static bool CheckValidType(const T& data)
+	static inline bool CheckValidType(const T& data)
 	{
 		size_t type = typeid(T).hash_code();
 
