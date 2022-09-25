@@ -33,6 +33,8 @@
 
 # Visual Studio Files
 *.vs
+*.aps
+*.vcxproj.user
 
 # Build Directories
 **/[bB]in
