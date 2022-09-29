@@ -1,5 +1,5 @@
 # NetSocket
-A useful header-only C++ library that aims to be a simpler, more robust way to integrate network sockets into other projects.
+A useful header-only C++ library that aims to be a simpler, more robust way to implement network sockets.
 
 ## Requirements
 - C++11 and above.
