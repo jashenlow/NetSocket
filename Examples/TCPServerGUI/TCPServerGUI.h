@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 // TCPServerApp:
 // See TCPServerGUI.cpp for the implementation of this class
@@ -25,44 +26,23 @@
 
 #define SERVER_PORT 28800
 #define MAX_PENDING_CLIENTS 10
-#define MAX_NUM_CLIENTS 10
-constexpr const wchar_t* PREFIX_DISPNAME	= L"displayname=";
-constexpr const wchar_t* PREFIX_SENDER		= L"sender=";
-constexpr const wchar_t* PREFIX_RECEIVER	= L"receiver=";
-constexpr const wchar_t	DELIM				= L'|';
-
-
-struct AppUIControls
-{
-	CIPAddressCtrl* IPAddress	= nullptr;
-	CListBox*		Clients		= nullptr;
-	CListBox*		Messages	= nullptr;
-	CButton*		StartServer = nullptr;
-	CButton*		StopServer	= nullptr;
-};
-
-struct ClientDisplayInfo
-{
-	std::wstring DisplayName;
-	char* IPAddress = nullptr;
-	char* HostName	= nullptr;
-};
+#define MAX_NUM_CLIENTS 100
+constexpr const wchar_t* PREFIX_DISPNAME		= L"0=";
+constexpr const wchar_t* PREFIX_ADD_CLIENT		= L"1=";
+constexpr const wchar_t* PREFIX_REMOVE_CLIENT	= L"2=";
+constexpr const wchar_t* PREFIX_SENDER			= L"3=";
+constexpr const wchar_t* PREFIX_RECEIVER		= L"4=";
+constexpr const wchar_t* PREFIX_SERVER_DOWN		= L"5=";
+constexpr const wchar_t	DELIM					= L'|';
 
 class TCPServerApp : public CWinApp
 {
 public:
 	TCPServerApp();
 
-	AppUIControls* UIControls();
 	NetSocket* GetSocket();
-	std::mutex* GetClientThreadMutex();
-	void AddDialogClient(const NetSocket::SocketInfo& client, const wchar_t* displayName);
-	void RemoveDialogClient(const NetSocket::SocketInfo& client);
-	void UpdateDialogClient(const NetSocket::SocketInfo& client, const wchar_t* newDisplayName);
-	void PrintDialogMessage(const wchar_t* msg);
 	void LaunchAcceptingThread();
-
-	void CloseAllThreads() noexcept;
+	void CloseAllThreads();
 
 
 // Overrides
@@ -73,19 +53,19 @@ public:
 
 	DECLARE_MESSAGE_MAP()
 private:
-	AppUIControls uiCtrl;
 	NetSocket serverSocket;
 
-	bool threadMasterFlag = false;
+	std::atomic<bool> threadRunFlag = false;
 	std::thread acceptThread;
+
 	std::unordered_map<size_t, std::thread> clientThreads;	//<SocketFD, <Client thread>
-	std::mutex clientThreadMutex;
-	std::mutex dispMutex;
+	std::mutex clientMutex;
 
-	std::unordered_map<size_t, std::pair<int, std::wstring>> clientsDisplay;	//<SocketFD, <Client list index, Display text>>
-
-	inline void AcceptIncomingClients(TCPServerApp* appInst);
-	inline void ProcessClientMessages(NetSocket::SocketInfo client);
+	inline void AcceptIncomingClients(std::atomic<bool>& run, TCPServerApp* appInst);
+	inline void ProcessClientMessages(std::atomic<bool>& run, NetSocket::SocketInfo client);
+	inline void ConstructAddClientMessage(const wchar_t* name, const wchar_t* ipAddress, const wchar_t* hostName, std::wstring& outString);
+	inline void TokenizeReceivedString(const std::wstring& string, const wchar_t& delim, std::vector<std::wstring>& tokens);
+	inline void ConstructSenderReceiverDisplay(const wchar_t* senderIP, const wchar_t*receiverIP, const wchar_t* msg, CString& outString);
 };
 
 extern TCPServerApp theApp;

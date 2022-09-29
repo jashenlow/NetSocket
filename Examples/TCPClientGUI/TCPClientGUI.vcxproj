@@ -20,9 +20,9 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
-    <ProjectGuid>{D5BCA835-0937-4558-B920-CEB876F905B3}</ProjectGuid>
+    <ProjectGuid>{94505898-DF9B-47DE-BECC-0CEA87D0F521}</ProjectGuid>
     <Keyword>MFCProj</Keyword>
-    <RootNamespace>TCPServerGUI</RootNamespace>
+    <RootNamespace>TCPClientGUI</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -94,7 +94,7 @@
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <SDLCheck>false</SDLCheck>
+      <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_WINDOWS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -194,8 +194,8 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
-    <ClInclude Include="TCPServerGUI.h" />
-    <ClInclude Include="TCPServerGUIDlg.h" />
+    <ClInclude Include="TCPClientGUI.h" />
+    <ClInclude Include="TCPClientGUIDlg.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
@@ -204,17 +204,17 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="TCPServerGUI.cpp" />
-    <ClCompile Include="TCPServerGUIDlg.cpp" />
+    <ClCompile Include="TCPClientGUI.cpp" />
+    <ClCompile Include="TCPClientGUIDlg.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="TCPServerGUI.rc" />
+    <ResourceCompile Include="TCPClientGUI.rc" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="res\TCPServerGUI.rc2" />
+    <None Include="res\TCPClientGUI.rc2" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="res\TCPServerGUI.ico" />
+    <Image Include="res\TCPClientGUI.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

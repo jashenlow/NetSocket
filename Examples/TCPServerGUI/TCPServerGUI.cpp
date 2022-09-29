@@ -11,7 +11,6 @@
 #define new DEBUG_NEW
 #endif
 
-
 // TCPServerApp
 
 BEGIN_MESSAGE_MAP(TCPServerApp, CWinApp)
@@ -30,105 +29,35 @@ TCPServerApp::TCPServerApp()
 	// Place all significant initialization in InitInstance
 }
 
-AppUIControls* TCPServerApp::UIControls()
-{
-	return &uiCtrl;
-}
-
 NetSocket* TCPServerApp::GetSocket()
 {
 	return &serverSocket;
 }
 
-std::mutex* TCPServerApp::GetClientThreadMutex()
-{
-	return &clientThreadMutex;
-}
-
-void TCPServerApp::AddDialogClient(const NetSocket::SocketInfo& client, const wchar_t* displayName)
-{
-	std::wstring displayStr;
-	displayStr += ((displayName == nullptr) || (displayName[0] == '\0')) ? L"(empty)" : displayName;
-	displayStr += L"\t\t";
-	displayStr += CA2CT(client.IPAddress);
-	displayStr += L"\t";
-	displayStr += CA2CT(client.HostName);
-
-	dispMutex.lock();
-	int index = uiCtrl.Clients->AddString(displayStr.c_str());
-	
-	clientsDisplay.insert({ client.SocketFD, {index, displayStr} });
-	dispMutex.unlock();
-}
-
-void TCPServerApp::RemoveDialogClient(const NetSocket::SocketInfo& client)
-{
-	int currentIndex = clientsDisplay[client.SocketFD].first;
-
-	dispMutex.lock();
-
-	uiCtrl.Clients->DeleteString(currentIndex);
-	clientsDisplay.erase(client.SocketFD);
-
-	//Decrement the indexes of all entires after this socket by 1, since this socket will be removed from the list.
-	for (auto& iter : clientsDisplay)
-	{
-		if (iter.second.first >= currentIndex)
-			iter.second.first -= 1;
-	}
-
-	dispMutex.unlock();
-}
-
-void TCPServerApp::UpdateDialogClient(const NetSocket::SocketInfo& client, const wchar_t* newDisplayName)
-{
-	if (newDisplayName != nullptr)
-	{
-		int index = clientsDisplay[client.SocketFD].first;
-
-		dispMutex.lock();
-		uiCtrl.Clients->DeleteString(index);
-
-		std::wstring displayStr;
-		displayStr += newDisplayName;
-		displayStr += L"\t\t";
-		displayStr += CA2CT(client.IPAddress);
-		displayStr += L"\t";
-		displayStr += CA2CT(client.HostName);
-
-		uiCtrl.Clients->InsertString(index, displayStr.c_str());
-		dispMutex.unlock();
-	}
-}
-
-void TCPServerApp::PrintDialogMessage(const wchar_t* msg)
-{
-	uiCtrl.Messages->AddString(msg);
-	m_pMainWnd->UpdateWindow();
-}
-
 void TCPServerApp::LaunchAcceptingThread()
 {
-	if (!threadMasterFlag)
-		threadMasterFlag = true;
+	threadRunFlag = true;
 
-	acceptThread = std::thread(&TCPServerApp::AcceptIncomingClients, this, this);
+	acceptThread = std::thread(&TCPServerApp::AcceptIncomingClients, this, std::ref(threadRunFlag), this);
 }
 
-void TCPServerApp::CloseAllThreads() noexcept
+void TCPServerApp::CloseAllThreads()
 {
-	threadMasterFlag = false;
-
-	if (acceptThread.joinable())
-		acceptThread.join();
-
-	for (auto& iter : clientThreads)
+	if (threadRunFlag)
 	{
-		if (iter.second.joinable())
-			iter.second.join();
-	}
+		threadRunFlag = false;
 
-	clientThreads.clear();
+		if (acceptThread.joinable())
+			acceptThread.join();
+
+		for (auto& iter : clientThreads)
+		{
+			if (iter.second.joinable())
+				iter.second.join();
+		}
+
+		clientThreads.clear();
+	}
 }
 
 
@@ -196,34 +125,36 @@ BOOL TCPServerApp::InitInstance()
 	return FALSE;
 }
 
-inline void TCPServerApp::AcceptIncomingClients(TCPServerApp* appInst)
+inline void TCPServerApp::AcceptIncomingClients(std::atomic<bool>& run, TCPServerApp* appInst)
 {
-	while (threadMasterFlag)
+	CTCPServerGUIDlg* p_Dialog = (CTCPServerGUIDlg*)m_pMainWnd;
+
+	while (run)
 	{
 		if (serverSocket.AcceptIncomingClientTCP())
 		{
-			NetSocket::SocketInfo newClient = serverSocket.GetRemoteSocketInfo().back();
-			bool isDuplicate = false;
+			const NetSocket::SocketInfo& newClient = serverSocket.GetRemoteSocketInfo().back();
 			
+			bool isDuplicate = false;
+
 			//Delete any thread objects that aren't running.
 			for (const auto& iter : clientThreads)
 			{
 				if (!iter.second.joinable())
-				{
-					clientThreadMutex.lock();
 					clientThreads.erase(iter.first);
-					clientThreadMutex.unlock();
-				}
 			}
 
 			//Drop client if the IP and HostName already exists
 			for (auto& socket : serverSocket.GetRemoteSocketInfo())
 			{
-				if ((strcmp(newClient.IPAddress, socket.IPAddress) == 0) && 
+				if ((strcmp(newClient.IPAddress, socket.IPAddress) == 0) &&
 					(strcmp(newClient.HostName, socket.HostName) == 0) &&
 					(newClient.SocketFD != socket.SocketFD))
 				{
+					clientMutex.lock();
 					serverSocket.DropClientConnectionTCP(newClient.SocketFD);
+					clientMutex.unlock();
+
 					isDuplicate = true;
 					break;
 				}
@@ -233,79 +164,142 @@ inline void TCPServerApp::AcceptIncomingClients(TCPServerApp* appInst)
 			{
 				if (clientThreads.size() < MAX_NUM_CLIENTS)
 				{
-					AddDialogClient(newClient, nullptr);
-					clientThreads.insert({ newClient.SocketFD, std::thread(&TCPServerApp::ProcessClientMessages, appInst, newClient) });
+					PostMessage(m_pMainWnd->m_hWnd, WM_ADD_CLIENT, (WPARAM)&newClient, NULL);
+					clientThreads.insert({ newClient.SocketFD, std::thread(&TCPServerApp::ProcessClientMessages, appInst, std::ref(threadRunFlag), newClient) });
 				}
 				else
+				{
+					clientMutex.lock();
 					serverSocket.DropClientConnectionTCP(newClient.SocketFD);
+					clientMutex.unlock();
+				}
 			}
 		}
-
-		if (serverSocket.GetThisSocketInfo().Blocking == 1)
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		else
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));	
 	}
 }
 
-inline void TCPServerApp::ProcessClientMessages(NetSocket::SocketInfo client)
+inline void TCPServerApp::ProcessClientMessages(std::atomic<bool>& run, NetSocket::SocketInfo client)
 {
 	std::wstring receivedMsg;
+	CTCPServerGUIDlg* p_Dialog = (CTCPServerGUIDlg*)m_pMainWnd;
+	bool isNonBlocking = (serverSocket.GetThisSocketInfo().NonBlocking == 1);
 
-	while (threadMasterFlag)
+	while (run)
 	{
 		int receivedBytes = serverSocket.ReceiveFromClientTCP(client, receivedMsg);
-		
-		if (receivedBytes > 0)
-		{
-			PrintDialogMessage(receivedMsg.c_str());
 
+		if (receivedBytes > 0)
+		{		
 			//Determine the type of message received
 			if (receivedMsg.find(PREFIX_DISPNAME) != std::wstring::npos)
 			{
-				std::wstring dispName = receivedMsg.substr(wcslen(PREFIX_DISPNAME), receivedMsg.length() - wcslen(PREFIX_DISPNAME));
-				UpdateDialogClient(client, dispName.c_str());
+				std::wstring newName = receivedMsg.substr(wcslen(PREFIX_DISPNAME), receivedMsg.length() - wcslen(PREFIX_DISPNAME));
+				PostMessage(m_pMainWnd->m_hWnd, WM_UPDATE_CLIENT, (WPARAM)&client, (LPARAM)newName.c_str());
+				
+				CString dispMsg = L"[";
+				dispMsg += CA2CT(client.IPAddress);
+				dispMsg += L"] DISPLAY NAME = ";
+				dispMsg += newName.c_str();
+				PostMessage(m_pMainWnd->m_hWnd, WM_APPEND_MESSAGE, (WPARAM)dispMsg.GetString(), NULL);
+
+				std::wstring sendMsg;
+				ConstructAddClientMessage(newName.c_str(), CA2CT(client.IPAddress), CA2CT(client.HostName), sendMsg);
+				//Send "Update Client" message to every client except this one.
+				for (NetSocket::SocketInfo c : serverSocket.GetRemoteSocketInfo())
+				{
+					if (c != client)
+						serverSocket.SendToClientTCP(c.SocketFD, sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg));
+				}
 			}
 			else if ((receivedMsg.find(PREFIX_SENDER) != std::wstring::npos) && (receivedMsg.find(PREFIX_RECEIVER) != std::wstring::npos))
 			{
-				std::string senderIP, receiverIP;
-				std::wstring message;
+				std::string receiverIP;
+				std::wstring senderIP;
 
-				size_t start = 0, end = 0;
 				std::vector<std::wstring> splitStrings;
+				TokenizeReceivedString(receivedMsg, DELIM, splitStrings);
 
-				while ((start = receivedMsg.find_first_not_of(DELIM, end)) != std::wstring::npos)
-				{
-					end = receivedMsg.find(DELIM, start);
-					splitStrings.emplace_back(receivedMsg.substr(start, end - start));
-					PrintDialogMessage(splitStrings.back().c_str());
-				}
-
-				receiverIP = CT2CA(splitStrings[1].substr(wcslen(PREFIX_RECEIVER), splitStrings[1].length() - wcslen(PREFIX_RECEIVER)).c_str());
+				senderIP	= splitStrings[0].substr(wcslen(PREFIX_RECEIVER), splitStrings[0].length() - wcslen(PREFIX_RECEIVER)).c_str();
+				receiverIP	= CT2CA(splitStrings[1].substr(wcslen(PREFIX_RECEIVER), splitStrings[1].length() - wcslen(PREFIX_RECEIVER)).c_str());
+				
+				CString dispMsg;
+				ConstructSenderReceiverDisplay(senderIP.c_str(), CA2CT(receiverIP.c_str()), splitStrings.back().c_str(), dispMsg);
+				PostMessage(m_pMainWnd->m_hWnd, WM_APPEND_MESSAGE, (WPARAM)dispMsg.GetString(), NULL);
 
 				for (auto& socket : serverSocket.GetRemoteSocketInfo())
 				{
 					if (strcmp(receiverIP.c_str(), socket.IPAddress) == 0)
 					{
 						//Relay the message to the intended recipient.
-						serverSocket.SendToClientTCP(socket.SocketFD, receivedMsg.c_str(), (receivedMsg.length() + 1) * sizeof(receivedMsg[0]));
+						serverSocket.SendToClientTCP(socket.SocketFD, receivedMsg.c_str(), NetUtil::GetStringSizeBytes(receivedMsg));
 						break;
 					}
 				}
 			}
 		}
-		else if (receivedBytes == 0)
-			break;
-		else
+		else if (receivedBytes == SOCKET_ERROR)
 		{
-			if (serverSocket.GetThisSocketInfo().Blocking == 1)
+			if (isNonBlocking)
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
-	}
+		else
+		{
+			//Client has disconnected.
+			CString ipAddress(CA2CT(client.IPAddress));
+			PostMessage(m_pMainWnd->m_hWnd, WM_REMOVE_CLIENT, (WPARAM)ipAddress.GetString(), NULL);
 
-	//Client has disconnected.
-	clientThreadMutex.lock();
-	RemoveDialogClient(client);
-	serverSocket.DropClientConnectionTCP(client.SocketFD);
-	clientThreadMutex.unlock();
+			//Notify other clients that this one has disconnected.
+			std::wstring sendMsg;
+			for (auto& socket : serverSocket.GetRemoteSocketInfo())
+			{
+				if (client != socket)
+				{
+					sendMsg = PREFIX_REMOVE_CLIENT;
+					sendMsg += CA2CT(client.IPAddress);
+					serverSocket.SendToClientTCP(socket.SocketFD, sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg));
+				}
+			}
+
+			clientMutex.lock();
+			serverSocket.DropClientConnectionTCP(client.SocketFD);
+			clientMutex.unlock();
+			break;
+		}
+	}
+}
+
+inline void TCPServerApp::ConstructAddClientMessage(const wchar_t* name, const wchar_t* ipAddress, const wchar_t* hostName, std::wstring& outString)
+{
+	outString = PREFIX_ADD_CLIENT;
+	outString += DELIM;
+	outString += name;
+	outString += DELIM;
+	outString += ipAddress;
+	outString += DELIM;
+	outString += hostName;
+}
+
+inline void TCPServerApp::TokenizeReceivedString(const std::wstring& string, const wchar_t& delim, std::vector<std::wstring>& tokens)
+{
+	size_t start = 0, end = 0;
+
+	while ((start = string.find_first_not_of(delim, end)) != std::wstring::npos)
+	{
+		end = string.find(DELIM, start);
+		tokens.emplace_back(string.substr(start, end - start));
+	}
+}
+
+inline void TCPServerApp::ConstructSenderReceiverDisplay(const wchar_t* senderIP, const wchar_t* receiverIP, const wchar_t* msg, CString& outString)
+{
+	outString = L"[";
+	outString += senderIP;
+	outString += L"] --> [";
+	outString += receiverIP;
+	outString += L"]: ";
+	outString += msg;
 }
 
 

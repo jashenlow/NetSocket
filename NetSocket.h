@@ -138,14 +138,14 @@ public:
 	{
 		SocketType		Type;
 		IPPROTO			Protocol;
-		unsigned long	Blocking;	//0 = Blocking, 1 = Non-Blocking.
+		unsigned long	NonBlocking;	//0 = Blocking, 1 = Non-Blocking.
 
 		LocalSocketInfo()
 		{
 			Reset();
 			Type		= SocketType::NONE;
 			Protocol	= IPPROTO::IPPROTO_UDP;
-			Blocking	= 0;	//0 = Blocking, 1 = Non-Blocking.
+			NonBlocking	= 0;	//0 = Blocking, 1 = Non-Blocking.
 		}
 	};
 
@@ -228,7 +228,7 @@ public:
 		WinsockError errorcode	= WinsockError::OK;
 
 		//Set local socket details
-		thisSocketInfo.Blocking			= (unsigned long)isNonBlocking;
+		thisSocketInfo.NonBlocking		= (unsigned long)isNonBlocking;
 		snprintf(thisSocketInfo.IPAddress, INET_ADDRSTRLEN, "%s", localIP);
 		thisSocketInfo.Port				= localPort;
 		thisSocketInfo.Type				= type;
@@ -261,7 +261,7 @@ public:
 				if (errorcode == WinsockError::OK)
 				{
 					//Set socket blocking flag
-					ioctlsocket(thisSocketInfo.SocketFD, FIONBIO, &thisSocketInfo.Blocking);
+					ioctlsocket(thisSocketInfo.SocketFD, FIONBIO, &thisSocketInfo.NonBlocking);
 
 					if (rxBuffer.empty())
 						SetRxBufferSize(maxBufferSize);
@@ -845,7 +845,7 @@ public:
 			if (recvBytes > 0)
 				streamData << ((T*)rxBuffer.data());
 
-				return recvBytes;
+			return recvBytes;	
 		}
 		else
 			return 0;
@@ -930,19 +930,19 @@ public:
 			
 			int result = (int)accept(thisSocketInfo.SocketFD, (sockaddr*)&newSocket.Addr, &addrSize);
 
-			if ((result != SOCKET_ERROR) && (result != INVALID_SOCKET))
+			if (result > 0)
 			{
 				newSocket.SocketFD = result;
 				GetIPFromSockAddr(newSocket);
 				GetPortFromSockAddr(newSocket);
 				ResolveHostName(newSocket);
-				
+
 				CheckAndAppendSocketInfo(newSocket);
 
 				return true;
 			}
 			else
-				return false;
+				return false;	
 		}
 		else
 			return false;

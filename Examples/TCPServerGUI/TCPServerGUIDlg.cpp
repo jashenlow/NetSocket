@@ -22,12 +22,6 @@ CTCPServerGUIDlg::CTCPServerGUIDlg(CWnd* pParent /*=nullptr*/)
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
 
-inline void CTCPServerGUIDlg::PrintMessage(const wchar_t* msg)
-{
-	p_App->UIControls()->Messages->AddString(msg);
-	UpdateWindow();
-}
-
 void CTCPServerGUIDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialogEx::DoDataExchange(pDX);
@@ -38,6 +32,11 @@ BEGIN_MESSAGE_MAP(CTCPServerGUIDlg, CDialogEx)
 	ON_WM_QUERYDRAGICON()
 	ON_BN_CLICKED(BTN_STARTSERVER, &CTCPServerGUIDlg::OnBnClickedStartserver)
 	ON_BN_CLICKED(BTN_STOPSERVER, &CTCPServerGUIDlg::OnBnClickedStopserver)
+	ON_MESSAGE(WM_APPEND_MESSAGE, &CTCPServerGUIDlg::OnAppendMessage)
+	ON_MESSAGE(WM_CLEAR_CLIENTS, &CTCPServerGUIDlg::OnClearClients)
+	ON_MESSAGE(WM_ADD_CLIENT, &CTCPServerGUIDlg::OnAddClient)
+	ON_MESSAGE(WM_REMOVE_CLIENT, &CTCPServerGUIDlg::OnRemoveClient)
+	ON_MESSAGE(WM_UPDATE_CLIENT, &CTCPServerGUIDlg::OnUpdateClient)
 END_MESSAGE_MAP()
 
 
@@ -46,7 +45,7 @@ END_MESSAGE_MAP()
 BOOL CTCPServerGUIDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
-
+	
 	// Set the icon for this dialog.  The framework does this automatically
 	//  when the application's main window is not a dialog
 	SetIcon(m_hIcon, TRUE);			// Set big icon
@@ -108,31 +107,118 @@ void CTCPServerGUIDlg::OnCancel()
 {	
 	if (p_App->GetSocket()->IsInitialized())
 	{
-		PrintMessage(L"Shutting down server...");
+		OnAppendMessage((WPARAM)L"Shutting down server...", NULL);
 
+		p_App->CloseAllThreads();
 		p_App->GetSocket()->CloseThisSocket();
 		p_App->GetSocket()->DropAllClients();
-		p_App->CloseAllThreads();
-
+		OnClearClients(NULL, NULL);
+		
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	PostQuitMessage(0);
 }
 
+LRESULT CTCPServerGUIDlg::OnAppendMessage(WPARAM wParam, LPARAM lParam)
+{
+	if (ui.Messages != nullptr)
+	{
+		int index = ui.Messages->AddString((LPCWSTR)wParam);
+		ui.Messages->SetTopIndex(index);	//To ensure the CListBox auto-scrolls to the bottom.
+	}
+
+	return 1;
+}
+
+LRESULT CTCPServerGUIDlg::OnClearClients(WPARAM wParam, LPARAM lParam)
+{
+	clients.clear();
+	ui.Clients->ResetContent();
+
+	return 1;
+}
+
+LRESULT CTCPServerGUIDlg::OnAddClient(WPARAM wParam, LPARAM lParam)
+{
+	if (ui.Clients != nullptr)
+	{
+		NetSocket::SocketInfo* client = (NetSocket::SocketInfo*)wParam;
+		const wchar_t* name			= (LPCWSTR)lParam;
+		const wchar_t* ipAddress	= CA2CT(client->IPAddress);
+		const wchar_t* hostName		= CA2CT(client->HostName);
+
+		std::wstring displayStr;
+		const wchar_t* newName = ((name == nullptr) || (name[0] == '\0')) ? L"(empty)" : name;
+		ConstructClientDisplayString(newName, ipAddress, hostName, displayStr);
+
+		int index = ui.Clients->AddString(displayStr.c_str());
+		ui.Messages->SetTopIndex(index);	//To ensure the CListBox auto-scrolls to the bottom.
+		clients.insert({ ipAddress, index });
+	}
+
+	return 1;
+}
+
+LRESULT CTCPServerGUIDlg::OnRemoveClient(WPARAM wParam, LPARAM lParam)
+{
+	LPCWSTR ipAddress = (LPCWSTR)wParam;
+
+	int index = -1;
+
+	for (auto& c : clients)
+	{
+		if (wcscmp(c.first.c_str(), ipAddress) == 0)
+			index = c.second;
+	}
+
+	if (index != -1)
+	{
+		ui.Clients->DeleteString(index);
+		clients.erase(ipAddress);
+
+		//Decrement the indexes of all entires after this socket by 1, since this socket was removed from the list.
+		for (auto& iter : clients)
+		{
+			if (iter.second >= index)
+				iter.second -= 1;
+		}
+	}
+	
+	return 1;
+}
+
+LRESULT CTCPServerGUIDlg::OnUpdateClient(WPARAM wParam, LPARAM lParam)
+{
+	NetSocket::SocketInfo* client = (NetSocket::SocketInfo*)wParam;
+	const wchar_t* name			= (LPCWSTR)lParam;
+	const wchar_t* ipAddress	= CA2CT(client->IPAddress);
+	const wchar_t* hostName		= CA2CT(client->HostName);
+
+	std::wstring displayStr;
+	const wchar_t* newName = ((name == nullptr) || (name[0] == '\0')) ? L"(empty)" : name;
+	ConstructClientDisplayString(newName, ipAddress, hostName, displayStr);
+
+	int index = clients[ipAddress];
+	ui.Clients->DeleteString(index);
+	ui.Clients->InsertString(index, displayStr.c_str());
+
+	return 1;
+}
+
 inline void CTCPServerGUIDlg::SetUIControls()
 {
-	p_App->UIControls()->IPAddress		= (CIPAddressCtrl*)GetDlgItem(EC_IPADDRESS);
-	p_App->UIControls()->Clients		= (CListBox*)GetDlgItem(LB_CLIENTS);
-	p_App->UIControls()->Messages		= (CListBox*)GetDlgItem(LB_MESSAGES);
-	p_App->UIControls()->StartServer	= (CButton*)GetDlgItem(BTN_STARTSERVER);
-	p_App->UIControls()->StopServer		= (CButton*)GetDlgItem(BTN_STOPSERVER);
+	ui.IPAddress	= (CIPAddressCtrl*)GetDlgItem(EC_IPADDRESS);
+	ui.Clients		= (CListBox*)GetDlgItem(LB_CLIENTS);
+	ui.Messages		= (CListBox*)GetDlgItem(LB_MESSAGES);
+	ui.StartServer	= (CButton*)GetDlgItem(BTN_STARTSERVER);
+	ui.StopServer	= (CButton*)GetDlgItem(BTN_STOPSERVER);
 }
 
 inline void CTCPServerGUIDlg::InitUIControls()
 {
-	p_App->UIControls()->IPAddress->SetWindowText(L"0.0.0.0");
-	p_App->UIControls()->StopServer->EnableWindow(false);
+	ui.IPAddress->SetWindowText(L"0.0.0.0");
+	ui.StopServer->EnableWindow(false);
 }
 
 inline void CTCPServerGUIDlg::CStringToStdString(const CString cStr, std::string& stdStr)
@@ -147,6 +233,14 @@ inline void CTCPServerGUIDlg::StdStringToCString(const std::string& stdStr, CStr
 	cStr = conv;
 }
 
+inline void CTCPServerGUIDlg::ConstructClientDisplayString(const wchar_t* name, const wchar_t* ipAddress, const wchar_t* hostName, std::wstring& outString)
+{
+	outString = name;
+	outString += L"\t\t";
+	outString += ipAddress;
+	outString += L'\t';
+	outString += hostName;
+}
 
 
 void CTCPServerGUIDlg::OnBnClickedStartserver()
@@ -160,26 +254,26 @@ void CTCPServerGUIDlg::OnBnClickedStartserver()
 	CString ipAddrCStr, portCStr;
 	std::string ipAddrStr;
 
-	p_App->UIControls()->IPAddress->GetWindowText(ipAddrCStr);
+	ui.IPAddress->GetWindowText(ipAddrCStr);
 	CStringToStdString(ipAddrCStr, ipAddrStr);
 
-	PrintMessage(L"Initializing server socket...");
+	OnAppendMessage((WPARAM)L"Initializing server socket...", NULL);
 
-	WinsockError initErr = socket->Init(ipAddrStr.c_str(), SERVER_PORT, SocketType::TCP_SERVER/*, true*/);
+	WinsockError initErr = socket->Init(ipAddrStr.c_str(), SERVER_PORT, SocketType::TCP_SERVER, true);
 
 	if (initErr == WinsockError::OK)
 	{
-		PrintMessage(L"Server socket initialized successfully.");
-		PrintMessage(L"----------------------------------------------------------------");
+		OnAppendMessage((WPARAM)L"Server socket initialized successfully.", NULL);
+		OnAppendMessage((WPARAM)L"----------------------------------------------------------------", NULL);
 		socket->StartListeningTCP(MAX_PENDING_CLIENTS);
 		p_App->LaunchAcceptingThread();
 
-		PrintMessage(L"Listening for connections...");
-		p_App->UIControls()->StartServer->EnableWindow(false);
-		p_App->UIControls()->StopServer->EnableWindow(true);
+		OnAppendMessage((WPARAM)L"Listening for connections...", NULL);
+		ui.StartServer->EnableWindow(false);
+		ui.StopServer->EnableWindow(true);
 	}
 	else
-		PrintMessage((L"Socket initialization failed with error code " + std::to_wstring(GetSocketError)).c_str());
+		OnAppendMessage((WPARAM)(L"Socket initialization failed with error code " + std::to_wstring(GetSocketError)).c_str(), NULL);
 }
 
 
@@ -187,22 +281,30 @@ void CTCPServerGUIDlg::OnBnClickedStopserver()
 {
 	NetSocket* socket = p_App->GetSocket();
 
-	PrintMessage(L"Shutting down server...");
+	OnAppendMessage((WPARAM)L"Shutting down server...", NULL);
 
 	if (socket->IsInitialized())
 	{	
-		if (socket->CloseThisSocket())
-		{
-			socket->DropAllClients();
-			p_App->CloseAllThreads();
-			
-			PrintMessage(L"Server shut down successfully.");
-			PrintMessage(L"----------------------------------------------------------------");
+		//Send disconnect message to all clients
+		std::wstring disConnStr(PREFIX_SERVER_DOWN);
+		for (auto& client : socket->GetRemoteSocketInfo())
+			socket->SendToClientTCP(client.SocketFD, PREFIX_SERVER_DOWN, NetUtil::GetStringSizeBytes(disConnStr));
 
-			p_App->UIControls()->StopServer->EnableWindow(false);
-			p_App->UIControls()->StartServer->EnableWindow(true);
+		p_App->CloseAllThreads();
+
+		if (socket->CloseThisSocket())
+		{		
+			socket->DropAllClients();
+			OnClearClients(NULL, NULL);
+
+			OnAppendMessage((WPARAM)L"Server shut down successfully.", NULL);
+			OnAppendMessage((WPARAM)L"----------------------------------------------------------------", NULL);
+			
+			socket->CloseThisSocket();
+			ui.StopServer->EnableWindow(false);
+			ui.StartServer->EnableWindow(true);
 		}
 		else
-			PrintMessage(L"Error: Unable to close server socket.");
+			OnAppendMessage((WPARAM)L"Error: Unable to close server socket.", NULL);
 	}
 }

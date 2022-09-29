@@ -10,10 +10,10 @@
 // add headers that you want to pre-compile here
 #include "framework.h"
 
-#define WM_APPEND_MESSAGE	WM_USER + 1	//For appending to the Messages CListBox
-#define WM_CLEAR_CLIENTS	WM_USER + 2
-#define WM_ADD_CLIENT		WM_USER + 3
-#define WM_REMOVE_CLIENT	WM_USER + 4
-#define WM_UPDATE_CLIENT	WM_USER + 5
+#define WM_APPEND_MESSAGE		WM_USER + 1	//For appending to the Messages CListBox
+#define WM_CLEAR_CLIENTS		WM_USER + 2
+#define WM_ADD_CLIENT			WM_USER + 3
+#define WM_REMOVE_CLIENT		WM_USER + 4
+#define WM_SERVER_DISCONNECT	WM_USER + 5
 
 #endif //PCH_H
