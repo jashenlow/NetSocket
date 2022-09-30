@@ -38,6 +38,8 @@ BEGIN_MESSAGE_MAP(CTCPClientGUIDlg, CDialogEx)
 	ON_MESSAGE(WM_ADD_CLIENT, &CTCPClientGUIDlg::OnAddClient)
 	ON_MESSAGE(WM_REMOVE_CLIENT, &CTCPClientGUIDlg::OnRemoveClient)
 	ON_MESSAGE(WM_SERVER_DISCONNECT, &CTCPClientGUIDlg::OnServerDisconnect)
+	ON_MESSAGE(WM_MSG_FROM_CLIENT, &CTCPClientGUIDlg::OnMsgFromClient)
+	ON_BN_CLICKED(IDOK, &CTCPClientGUIDlg::OnOK)
 END_MESSAGE_MAP()
 
 
@@ -54,7 +56,7 @@ BOOL CTCPClientGUIDlg::OnInitDialog()
 
 	// TODO: Add extra initialization here
 	ModifyStyle(0, WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX, TRUE);
-	SetDefID(IDIGNORE);	//This prevents dialog from closing when user presses Enter.
+	//SetDefID(IDIGNORE);	//This prevents dialog from closing when user presses Enter.
 	
 	if (p_App == nullptr)
 		p_App = (TCPClientApp*)AfxGetApp();
@@ -118,6 +120,23 @@ void CTCPClientGUIDlg::OnCancel()
 
 	PostQuitMessage(0);
 }
+
+void CTCPClientGUIDlg::OnOK()
+{
+	//Do nothing
+}
+
+//BOOL CTCPClientGUIDlg::PreTranslateMessage(MSG* msg)
+//{
+//	//Send message in the EC_SENDMESSAGE control if the ENTER key is pressed
+//	if ((msg->message == WM_KEYDOWN) && (msg->wParam == VK_RETURN))
+//	{
+//		if (GetFocus()->GetDlgCtrlID() == EC_SENDMESSAGE)
+//			OnBnClickedSend();
+//	}
+//
+//	return CDialog::PreTranslateMessage(msg);
+//}
 
 LRESULT CTCPClientGUIDlg::OnAppendMessage(WPARAM wParam, LPARAM lParam)
 {
@@ -196,6 +215,28 @@ LRESULT CTCPClientGUIDlg::OnServerDisconnect(WPARAM wParam, LPARAM lParam)
 	return 1;
 }
 
+LRESULT CTCPClientGUIDlg::OnMsgFromClient(WPARAM wParam, LPARAM lParam)
+{
+	std::wstring fullMsg = (LPCWSTR)wParam;
+	std::wstring senderIP;
+
+	std::vector<std::wstring> splitStrings;
+	TokenizeReceivedString(fullMsg, DELIM, splitStrings);
+
+	senderIP = splitStrings[0].substr(wcslen(PREFIX_RECEIVER), splitStrings[0].length() - wcslen(PREFIX_RECEIVER)).c_str();
+	
+	std::wstring senderName;
+	LookupDisplayName(senderIP.c_str(), senderName);
+	CString myDispName;
+	ui.DisplayName->GetWindowText(myDispName);
+
+	CString dispMsg;
+	ConstructSenderReceiverDisplay(senderName.c_str(), myDispName.GetString(), splitStrings.back().c_str(), dispMsg);
+	OnAppendMessage((WPARAM)dispMsg.GetString(), NULL);
+
+	return 1;
+}
+
 inline void CTCPClientGUIDlg::SetUIControls()
 {
 	ui.LocalIP		= (CIPAddressCtrl*)GetDlgItem(EC_LOCALIPADDRESS);
@@ -260,7 +301,7 @@ inline void CTCPClientGUIDlg::TokenizeReceivedString(const std::wstring& string,
 	}
 }
 
-void CTCPClientGUIDlg::ConstructSenderReceiverDisplay(LPCWSTR sender, LPCWSTR receiver, LPCWSTR msg, CString& outString)
+inline void CTCPClientGUIDlg::ConstructSenderReceiverDisplay(LPCWSTR sender, LPCWSTR receiver, LPCWSTR msg, CString& outString)
 {
 	outString = L"[";
 	outString += sender;
@@ -268,6 +309,25 @@ void CTCPClientGUIDlg::ConstructSenderReceiverDisplay(LPCWSTR sender, LPCWSTR re
 	outString += receiver;
 	outString += L"]: ";
 	outString += msg;
+}
+
+inline void CTCPClientGUIDlg::LookupDisplayName(const wchar_t* ipAddress, std::wstring& name)
+{
+	std::wstring dispString;
+
+	int index = ui.Clients->FindString(-1, ipAddress);
+
+	if (index != LB_ERR)
+	{
+		CString lineTextCStr;	
+		ui.Clients->GetText(index, lineTextCStr);
+		
+		std::wstring lineText(lineTextCStr.GetString());
+		size_t tabIndex = lineText.find(L'\t');
+
+		if (tabIndex != std::wstring::npos)
+			name = lineText.substr(0, lineText.length() - tabIndex);
+	}
 }
 
 void CTCPClientGUIDlg::OnBnClickedConnect()
@@ -366,36 +426,44 @@ void CTCPClientGUIDlg::OnBnClickedSend()
 	//Get receiver's IP
 	int selectedIndex = ui.Clients->GetCurSel();
 	std::wstring receiverIP;
-
-	for (auto& c : clients)
+	
+	if (selectedIndex != LB_ERR)
 	{
-		if (c.second == selectedIndex)
-			receiverIP = c.first;
-	}
-
-	if (!receiverIP.empty())
-	{
-		ui.SendMsg->GetWindowText(msgTextCStr);
-		std::wstring msgText(msgTextCStr.GetString());
-		std::wstring senderIP = CA2CT(socket->GetThisSocketInfo().IPAddress);
-
-		std::wstring sendMsg;
-		ConstructSenderReceiverString(senderIP.c_str(), receiverIP.c_str(), msgText.c_str(), sendMsg);
-
-		if (socket->SendToServerTCP(sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg)))
+		for (auto& c : clients)
 		{
-			CString myDispNameCStr;
-			ui.DisplayName->GetWindowText(myDispNameCStr);
-			
-			CString receiverDispCStr;
-			ui.Clients->GetText(selectedIndex, receiverDispCStr);
-			std::wstring receiverDisp(receiverDispCStr.GetString());
-			std::wstring receiverName = receiverDisp.substr(0, receiverDisp.find(L'\t'));
-			receiverDispCStr = receiverName.c_str();
-
-			CString dispString;
-			ConstructSenderReceiverDisplay(myDispNameCStr.GetString(), receiverDispCStr.GetString(), msgTextCStr.GetString(), dispString);
-			OnAppendMessage((WPARAM)dispString.GetString(), NULL);
+			if (c.second == selectedIndex)
+				receiverIP = c.first;
 		}
+
+		if (!receiverIP.empty())
+		{
+			ui.SendMsg->GetWindowText(msgTextCStr);
+			std::wstring msgText(msgTextCStr.GetString());
+			std::wstring senderIP = CA2CT(socket->GetThisSocketInfo().IPAddress);
+
+			if (!msgText.empty())
+			{
+				std::wstring sendMsg;
+				ConstructSenderReceiverString(senderIP.c_str(), receiverIP.c_str(), msgText.c_str(), sendMsg);
+
+				if (socket->SendToServerTCP(sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg)))
+				{
+					CString myDispNameCStr;
+					ui.DisplayName->GetWindowText(myDispNameCStr);
+
+					CString receiverDispCStr;
+					ui.Clients->GetText(selectedIndex, receiverDispCStr);
+					std::wstring receiverDisp(receiverDispCStr.GetString());
+					std::wstring receiverName = receiverDisp.substr(0, receiverDisp.find(L'\t'));
+					receiverDispCStr = receiverName.c_str();
+
+					CString dispString;
+					ConstructSenderReceiverDisplay(myDispNameCStr.GetString(), receiverDispCStr.GetString(), msgTextCStr.GetString(), dispString);
+					OnAppendMessage((WPARAM)dispString.GetString(), NULL);
+				}
+			}
+		}
+
+		ui.SendMsg->SetWindowText(L"");
 	}
 }

@@ -30,6 +30,7 @@ void CTCPServerGUIDlg::DoDataExchange(CDataExchange* pDX)
 BEGIN_MESSAGE_MAP(CTCPServerGUIDlg, CDialogEx)
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
+	ON_BN_CLICKED(IDOK, &CTCPServerGUIDlg::OnOK)
 	ON_BN_CLICKED(BTN_STARTSERVER, &CTCPServerGUIDlg::OnBnClickedStartserver)
 	ON_BN_CLICKED(BTN_STOPSERVER, &CTCPServerGUIDlg::OnBnClickedStopserver)
 	ON_MESSAGE(WM_APPEND_MESSAGE, &CTCPServerGUIDlg::OnAppendMessage)
@@ -118,6 +119,11 @@ void CTCPServerGUIDlg::OnCancel()
 	}
 
 	PostQuitMessage(0);
+}
+
+void CTCPServerGUIDlg::OnOK()
+{
+	//Do nothing
 }
 
 LRESULT CTCPServerGUIDlg::OnAppendMessage(WPARAM wParam, LPARAM lParam)
@@ -219,6 +225,7 @@ inline void CTCPServerGUIDlg::InitUIControls()
 {
 	ui.IPAddress->SetWindowText(L"0.0.0.0");
 	ui.StopServer->EnableWindow(false);
+	
 }
 
 inline void CTCPServerGUIDlg::CStringToStdString(const CString cStr, std::string& stdStr)

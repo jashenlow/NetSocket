@@ -153,9 +153,23 @@ inline void TCPClientApp::ProcessNetworkMessages(std::atomic<bool>& run)
 				PostMessage(m_pMainWnd->m_hWnd, WM_SERVER_DISCONNECT, NULL, NULL);
 				break;
 			}
-			else
+			else if (receivedMsg.find(PREFIX_ADD_CLIENT) != std::wstring::npos)
 			{
-				//TODO
+				//New client has been added
+				CString newClient(receivedMsg.c_str());
+				PostMessage(m_pMainWnd->m_hWnd, WM_ADD_CLIENT, (WPARAM)newClient.GetString(), NULL);
+			}
+			else if (receivedMsg.find(PREFIX_REMOVE_CLIENT) != std::wstring::npos)
+			{
+				//A client has been disconnected
+				size_t prefixLen = wcslen(PREFIX_REMOVE_CLIENT);
+
+				CString remClient(receivedMsg.substr(prefixLen, receivedMsg.length() - prefixLen).c_str());
+				PostMessage(m_pMainWnd->m_hWnd, WM_REMOVE_CLIENT, (WPARAM)remClient.GetString(), NULL);
+			}
+			else if ((receivedMsg.find(PREFIX_SENDER) != std::wstring::npos) && (receivedMsg.find(PREFIX_RECEIVER) != std::wstring::npos))
+			{
+				PostMessage(m_pMainWnd->m_hWnd, WM_MSG_FROM_CLIENT, (WPARAM)receivedMsg.c_str(), NULL);
 			}
 			
 		}

@@ -52,6 +52,9 @@ protected:
 	afx_msg LRESULT OnAddClient(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnRemoveClient(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnServerDisconnect(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnMsgFromClient(WPARAM wParam, LPARAM lParam);
+	afx_msg void OnOK();
+	//afx_msg BOOL PreTranslateMessage(MSG* msg);
 
 private:
 	TCPClientApp* p_App = nullptr;
@@ -65,7 +68,8 @@ private:
 	inline void ConstructClientDisplayString(const wchar_t* name, const wchar_t* ipAddress, const wchar_t* hostName, std::wstring& outString);
 	inline void ConstructSenderReceiverString(const wchar_t* senderIP, const wchar_t* receiverIP, const wchar_t* msg, std::wstring& outString);
 	inline void TokenizeReceivedString(const std::wstring& string, const wchar_t& delim, std::vector<std::wstring>& tokens);
-	void ConstructSenderReceiverDisplay(LPCWSTR sender, LPCWSTR receiver, LPCWSTR msg, CString& outString);
+	inline void ConstructSenderReceiverDisplay(LPCWSTR sender, LPCWSTR receiver, LPCWSTR msg, CString& outString);
+	inline void LookupDisplayName(const wchar_t* ipAddress, std::wstring& name);
 
 public:
 	afx_msg void OnBnClickedConnect();

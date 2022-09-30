@@ -63,6 +63,7 @@ private:
 	std::thread networkThread;
 
 	inline void ProcessNetworkMessages(std::atomic<bool>& run);
+	
 };
 
 extern TCPClientApp theApp;

@@ -15,5 +15,6 @@
 #define WM_ADD_CLIENT			WM_USER + 3
 #define WM_REMOVE_CLIENT		WM_USER + 4
 #define WM_SERVER_DISCONNECT	WM_USER + 5
+#define WM_MSG_FROM_CLIENT		WM_USER + 6
 
 #endif //PCH_H

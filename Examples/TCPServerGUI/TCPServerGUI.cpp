@@ -206,11 +206,17 @@ inline void TCPServerApp::ProcessClientMessages(std::atomic<bool>& run, NetSocke
 
 				std::wstring sendMsg;
 				ConstructAddClientMessage(newName.c_str(), CA2CT(client.IPAddress), CA2CT(client.HostName), sendMsg);
-				//Send "Update Client" message to every client except this one.
+				
 				for (NetSocket::SocketInfo c : serverSocket.GetRemoteSocketInfo())
 				{
 					if (c != client)
+					{
+						//Send "Add Client" message to every client except this one.
 						serverSocket.SendToClientTCP(c.SocketFD, sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg));
+						//Send "Add Client" message to this client, to update it's client list.
+						serverSocket.SendToClientTCP(client.SocketFD, sendMsg.c_str(), NetUtil::GetStringSizeBytes(sendMsg));
+					}
+						
 				}
 			}
 			else if ((receivedMsg.find(PREFIX_SENDER) != std::wstring::npos) && (receivedMsg.find(PREFIX_RECEIVER) != std::wstring::npos))
@@ -221,7 +227,7 @@ inline void TCPServerApp::ProcessClientMessages(std::atomic<bool>& run, NetSocke
 				std::vector<std::wstring> splitStrings;
 				TokenizeReceivedString(receivedMsg, DELIM, splitStrings);
 
-				senderIP	= splitStrings[0].substr(wcslen(PREFIX_RECEIVER), splitStrings[0].length() - wcslen(PREFIX_RECEIVER)).c_str();
+				senderIP	= splitStrings[0].substr(wcslen(PREFIX_SENDER), splitStrings[0].length() - wcslen(PREFIX_SENDER)).c_str();
 				receiverIP	= CT2CA(splitStrings[1].substr(wcslen(PREFIX_RECEIVER), splitStrings[1].length() - wcslen(PREFIX_RECEIVER)).c_str());
 				
 				CString dispMsg;
