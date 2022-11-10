@@ -23,8 +23,9 @@
 #ifndef _NETUTIL_H_
 #define _NETUTIL_H_
 
-#include <typeinfo>
+#include <type_traits>
 #include <string>
+#include <algorithm>
 
 /*
 * NOTES:
@@ -37,13 +38,10 @@ public:
 	template<typename T>
 	static bool ByteSwap(T& data)
 	{
-		if (CheckValidType(data))
+		if (std::is_fundamental<T>::value && (sizeof(T) > 1))
 		{
-			char* buff		= (char*)&data;
-			uint16_t size	= sizeof(T);
-			
-			for (uint16_t i = 0; i < (size / 2); i++)
-				std::swap(buff[i], buff[size - 1 - i]);
+			char* buff = (char*)&data;			
+			std::reverse(buff, buff + sizeof(T));
 
 			return true;
 		}
@@ -55,16 +53,13 @@ public:
 	template<typename T>
 	static bool ByteSwap(std::basic_string<T>& str)
 	{
-		//Ignore std::string since it uses the char type.
-		if (typeid(T).hash_code() != typeid(char).hash_code())
+		//Ignore char type since size == 1.
+		if (sizeof(T) > 1)
 		{
-			char* buff			= (char*)&str[0];
-			uint16_t charSize	= sizeof(T);
-			
-			for (uint16_t i = 0; i < (str.length() * charSize); i += charSize)
+			for (T& c : str)
 			{
-				for (uint16_t c = 0; c < (charSize / 2); c++)
-					std::swap(buff[i + c], buff[i + charSize - 1 - c]);
+				char* buff = (char*)&c;
+				std::reverse(buff, buff + sizeof(T));
 			}
 
 			return true;
@@ -82,29 +77,6 @@ public:
 private:
 	NetUtil() {}
 	~NetUtil() {}
-
-	template<typename T>
-	static inline bool CheckValidType(const T& data)
-	{
-		size_t type = typeid(T).hash_code();
-
-		return (
-			(type == typeid(short).hash_code()) ||
-			(type == typeid(unsigned short).hash_code()) ||
-			(type == typeid(int).hash_code()) ||
-			(type == typeid(unsigned int).hash_code()) ||
-			(type == typeid(long).hash_code()) ||
-			(type == typeid(unsigned long).hash_code()) ||
-			(type == typeid(long long).hash_code()) ||
-			(type == typeid(unsigned long long).hash_code()) ||
-			(type == typeid(float).hash_code()) ||
-			(type == typeid(double).hash_code()) ||
-			(type == typeid(long double).hash_code()) ||
-			(type == typeid(wchar_t).hash_code()) ||
-			(type == typeid(char16_t).hash_code()) ||
-			(type == typeid(char32_t).hash_code())
-			);
-	}
 };
 
 #endif
