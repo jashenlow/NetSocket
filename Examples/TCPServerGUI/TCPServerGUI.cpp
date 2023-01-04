@@ -125,7 +125,7 @@ BOOL TCPServerApp::InitInstance()
 	return FALSE;
 }
 
-inline void TCPServerApp::AcceptIncomingClients(std::atomic<bool>& run, TCPServerApp* appInst)
+inline void TCPServerApp::AcceptIncomingClients(bool& run, TCPServerApp* appInst)
 {
 	CTCPServerGUIDlg* p_Dialog = (CTCPServerGUIDlg*)m_pMainWnd;
 
@@ -151,9 +151,8 @@ inline void TCPServerApp::AcceptIncomingClients(std::atomic<bool>& run, TCPServe
 					(strcmp(newClient.HostName, socket.HostName) == 0) &&
 					(newClient.SocketFD != socket.SocketFD))
 				{
-					clientMutex.lock();
+					std::lock_guard<std::mutex> guard(clientMutex);
 					serverSocket.DropClientConnectionTCP(newClient.SocketFD);
-					clientMutex.unlock();
 
 					isDuplicate = true;
 					break;
@@ -169,9 +168,8 @@ inline void TCPServerApp::AcceptIncomingClients(std::atomic<bool>& run, TCPServe
 				}
 				else
 				{
-					clientMutex.lock();
+					std::lock_guard<std::mutex> guard(clientMutex);
 					serverSocket.DropClientConnectionTCP(newClient.SocketFD);
-					clientMutex.unlock();
 				}
 			}
 		}
@@ -180,7 +178,7 @@ inline void TCPServerApp::AcceptIncomingClients(std::atomic<bool>& run, TCPServe
 	}
 }
 
-inline void TCPServerApp::ProcessClientMessages(std::atomic<bool>& run, NetSocket::SocketInfo client)
+inline void TCPServerApp::ProcessClientMessages(bool& run, NetSocket::SocketInfo client)
 {
 	std::wstring receivedMsg;
 	CTCPServerGUIDlg* p_Dialog = (CTCPServerGUIDlg*)m_pMainWnd;
@@ -268,9 +266,8 @@ inline void TCPServerApp::ProcessClientMessages(std::atomic<bool>& run, NetSocke
 				}
 			}
 
-			clientMutex.lock();
+			std::lock_guard<std::mutex> guard(clientMutex);
 			serverSocket.DropClientConnectionTCP(client.SocketFD);
-			clientMutex.unlock();
 			break;
 		}
 	}

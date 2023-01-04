@@ -18,7 +18,6 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
-#include <atomic>
 
 // TCPClientApp:
 // See TCPClientGUI.cpp for the implementation of this class
@@ -58,11 +57,11 @@ public:
 private:
 	NetSocket clientSocket;
 
-	bool connectedToServer			= false;
-	std::atomic<bool> threadRunFlag = false;
+	bool connectedToServer	= false;
+	bool threadRunFlag		= false;
 	std::thread networkThread;
 
-	inline void ProcessNetworkMessages(std::atomic<bool>& run);
+	inline void ProcessNetworkMessages(bool& run);
 	
 };
 

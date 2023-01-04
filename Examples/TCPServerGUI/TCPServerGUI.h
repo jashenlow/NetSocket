@@ -18,7 +18,6 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
-#include <atomic>
 
 // TCPServerApp:
 // See TCPServerGUI.cpp for the implementation of this class
@@ -55,14 +54,14 @@ public:
 private:
 	NetSocket serverSocket;
 
-	std::atomic<bool> threadRunFlag = false;
+	bool threadRunFlag = false;
 	std::thread acceptThread;
 
 	std::unordered_map<size_t, std::thread> clientThreads;	//<SocketFD, <Client thread>
 	std::mutex clientMutex;
 
-	inline void AcceptIncomingClients(std::atomic<bool>& run, TCPServerApp* appInst);
-	inline void ProcessClientMessages(std::atomic<bool>& run, NetSocket::SocketInfo client);
+	inline void AcceptIncomingClients(bool& run, TCPServerApp* appInst);
+	inline void ProcessClientMessages(bool& run, NetSocket::SocketInfo client);
 	inline void ConstructAddClientMessage(const wchar_t* name, const wchar_t* ipAddress, const wchar_t* hostName, std::wstring& outString);
 	inline void TokenizeReceivedString(const std::wstring& string, const wchar_t& delim, std::vector<std::wstring>& tokens);
 	inline void ConstructSenderReceiverDisplay(const wchar_t* senderIP, const wchar_t*receiverIP, const wchar_t* msg, CString& outString);

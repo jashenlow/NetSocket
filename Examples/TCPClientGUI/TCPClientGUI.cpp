@@ -135,7 +135,7 @@ BOOL TCPClientApp::InitInstance()
 	return FALSE;
 }
 
-inline void TCPClientApp::ProcessNetworkMessages(std::atomic<bool>& run)
+inline void TCPClientApp::ProcessNetworkMessages(bool& run)
 {
 	std::wstring receivedMsg;
 	CTCPClientGUIDlg* p_Dialog = (CTCPClientGUIDlg*)m_pMainWnd;
