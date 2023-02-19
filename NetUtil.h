@@ -29,29 +29,24 @@
 
 /*
 * NOTES:
-*   - This class serves as a platform independent implementation for performing byte-swapping operations.
+*   - This utility header serves as a platform independent implementation for performing byte-swapping operations.
 */
-class NetUtil
+namespace NetUtil
 {
-public:
 	//Call this to perform byte-swapping on primitive data types.
 	template<typename T>
-	static bool ByteSwap(T& data)
+	inline void ByteSwap(T& data)
 	{
 		if (std::is_fundamental<T>::value && (sizeof(T) > 1))
 		{
 			char* buff = (char*)&data;			
 			std::reverse(buff, buff + sizeof(T));
-
-			return true;
 		}
-		else
-			return false;
 	}
 
 	//Call this for byte-swapping unicode strings directly from the std container.
 	template<typename T>
-	static bool ByteSwap(std::basic_string<T>& str)
+	inline void ByteSwap(std::basic_string<T>& str)
 	{
 		//Ignore char type since size == 1.
 		if (sizeof(T) > 1)
@@ -61,22 +56,14 @@ public:
 				char* buff = (char*)&c;
 				std::reverse(buff, buff + sizeof(T));
 			}
-
-			return true;
 		}
-		else
-			return false;
 	}
 
 	template<typename T>
-	static size_t GetStringSizeBytes(const std::basic_string<T>& str)
+	inline size_t GetStringSizeBytes(const std::basic_string<T>& str)
 	{
 		return (str.length() + 1) * sizeof(T);
 	}
-
-private:
-	NetUtil() {}
-	~NetUtil() {}
 };
 
 #endif
