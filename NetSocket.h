@@ -53,6 +53,12 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <future>
+
+#if __cplusplus >= 201703L
+#define NETSOCKET_MIN_CPP17
+#endif
 
 constexpr uint16_t	BUFFER_DEFAULT_SIZE	= 4096;
 constexpr uint16_t	MAX_UDP_BUFFER_SIZE	= 65507;
@@ -185,9 +191,22 @@ public:
 	}
 
 	//Get the list of remote socket info.
-	const std::vector<SocketInfo>& GetRemoteSocketInfo() const
+	const std::vector<SocketInfo>& GetRemoteSocketInfo()
 	{
 		return remoteSocketInfo;
+	}
+
+	//Lookup and return the SocketInfo container by specifying an IP address.
+	void GetRemoteSocketInfoFromIP(const char* ipAddress, SocketInfo& remoteSocket)
+	{
+		for (auto& currSocketInfo : remoteSocketInfo)
+		{
+			if (strcmp(currSocketInfo.IPAddress, ipAddress) == 0)
+			{
+				remoteSocket = currSocketInfo;
+				break;
+			}
+		}
 	}
 
 	const uint32_t& GetMaxRemoteSockets() const
@@ -198,12 +217,6 @@ public:
 	void SetMaxRemoteSockets(const uint32_t& num)
 	{
 		maxRemoteSocketInfo = num;
-	}
-
-	//Returns the current hostname of the specified socket.
-	const char* GetHostName(const SocketInfo& socket) const
-	{
-		return socket.HostName;
 	}
 
 	//Get transmit buffer size
@@ -221,7 +234,7 @@ public:
 
 #ifdef SOCKET_PLATFORM_WINDOWS
 	//Initialize socket
-	WinsockError Init(const char* localIP, const uint16_t& localPort, const SocketType& type, const bool& isNonBlocking = false)
+	WinsockError Init(const char* localIP, const uint16_t& localPort, const SocketType& type, const bool& isNonBlocking = false, bool resolveHostName = false)
 	{
 		connectedToServer		= false;
 		maxBufferSize			= (type == SocketType::UDP) ? MAX_UDP_BUFFER_SIZE : MAX_TCP_BUFFER_SIZE;
@@ -281,7 +294,8 @@ public:
 						remoteSocketInfo.resize(1);
 
 					//Get the hostname of this machine.
-					ResolveHostName(thisSocketInfo);
+					if (resolveHostName)
+						ResolveHostName(thisSocketInfo);
 				}
 			}
 		}
@@ -326,7 +340,14 @@ public:
 			{
 				if (strcmp(sockIter->IPAddress, clientIP) == 0)
 				{
-					sockIter = remoteSocketInfo.erase(sockIter);
+					{
+#ifdef NETSOCKET_MIN_CPP17
+						std::scoped_lock remoteSocketLock{ remoteSocketMutex };
+#else
+						std::lock_guard<std::mutex> remoteSocketLock(remoteSocketMutex);
+#endif
+						sockIter = remoteSocketInfo.erase(sockIter);
+					}
 					break;
 				}
 			}
@@ -373,8 +394,9 @@ public:
 	  - senderIP:       The IP address of the sender.
 	  - senderPort:     The sender's port number.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
-	int ReceiveUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
+	int ReceiveUDP(void* data, const size_t& dataSize, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
@@ -386,11 +408,6 @@ public:
 
 			if (recvBytes > 0)
 			{
-				GetIPFromSockAddr(senderInfo);
-				senderIP = senderInfo.IPAddress;
-				GetPortFromSockAddr(senderInfo);
-				senderPort = senderInfo.Port;
-
 				//Check if all received data should be copied into the "data" argument without checking.
 				if (dataSize == SIZE_MAX)
 					memcpy(data, rxBuffer.data(), recvBytes);
@@ -401,14 +418,14 @@ public:
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
 
-				if (storeSenderInfo)
+				GetIPFromSockAddr(senderInfo.Addr, senderIP);
+				GetPortFromSockAddr(senderInfo.Addr, senderPort);
+
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						ResolveHostName(senderInfo);
-						CheckAndAppendSocketInfo(senderInfo);
-					}
-				}	
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
+				}
 			}
 
 			return recvBytes;
@@ -425,8 +442,9 @@ public:
 	  - dataSize:       The expected data size to be received. Set to SIZE_MAX if the expected data size is unknown.
 			            If set to SIZE_MAX, ensure that the "data" argument points to a buffer large enough to avoid potential overruns.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
-	int ReceiveUDP(void* data, const size_t& dataSize, bool storeSenderInfo = false)
+	int ReceiveUDP(void* data, const size_t& dataSize, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if ((data != nullptr) && (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP))
 		{
@@ -448,17 +466,11 @@ public:
 						memcpy(data, rxBuffer.data(), recvBytes);
 				}
 
-				if (storeSenderInfo)
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						GetIPFromSockAddr(senderInfo);
-						GetPortFromSockAddr(senderInfo);
-						ResolveHostName(senderInfo);
-
-						CheckAndAppendSocketInfo(senderInfo);
-					}
-				}	
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
+				}
 			}
 
 			return recvBytes;
@@ -475,9 +487,10 @@ public:
 	  - senderIP:       The IP address of the sender.
 	  - senderPort:     The sender's port number.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
+	int ReceiveUDP(std::basic_string<T>& strData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
@@ -489,20 +502,15 @@ public:
 
 			if (recvBytes > 0)
 			{
-				GetIPFromSockAddr(senderInfo);
-				senderIP = senderInfo.IPAddress;
-				GetPortFromSockAddr(senderInfo);
-				senderPort = senderInfo.Port;
+				GetIPFromSockAddr(senderInfo.Addr, senderIP);
+				GetPortFromSockAddr(senderInfo.Addr, senderPort);
 
 				strData.assign((T*)rxBuffer.data());
 
-				if (storeSenderInfo)
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						ResolveHostName(senderInfo);
-						CheckAndAppendSocketInfo(senderInfo);
-					}
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
 				}
 			}
 
@@ -518,9 +526,10 @@ public:
 	Arguments:
 	  - strData:        Reference to the string variable used. Examples: std::string, std::wstring, std::u16string, std::u32string.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_string<T>& strData, bool storeSenderInfo = false)
+	int ReceiveUDP(std::basic_string<T>& strData, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
@@ -534,17 +543,11 @@ public:
 			{
 				strData.assign((T*)rxBuffer.data());
 
-				if (storeSenderInfo)
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						GetIPFromSockAddr(senderInfo);
-						GetPortFromSockAddr(senderInfo);
-						ResolveHostName(senderInfo);
-
-						CheckAndAppendSocketInfo(senderInfo);
-					}
-				}	
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
+				}
 			}
 
 			return recvBytes;
@@ -561,9 +564,10 @@ public:
 	  - senderIP:   The IP address of the sender.
 	  - senderPort: The sender's port number.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_iostream<T>& streamData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false)
+	int ReceiveUDP(std::basic_iostream<T>& streamData, std::string& senderIP, uint16_t& senderPort, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
@@ -575,21 +579,16 @@ public:
 
 			if (recvBytes > 0)
 			{
-				GetIPFromSockAddr(senderInfo);
-				senderIP = senderInfo.IPAddress;
-				GetPortFromSockAddr(senderInfo);
-				senderPort = senderInfo.Port;
+				GetIPFromSockAddr(senderInfo.Addr, senderIP);
+				GetPortFromSockAddr(senderInfo.Addr, senderPort);
 
 				streamData << (T*)rxBuffer.data();
-				
-				if (storeSenderInfo)
+
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						ResolveHostName(senderInfo);
-						CheckAndAppendSocketInfo(senderInfo);
-					}
-				}	
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
+				}
 			}
 
 			return recvBytes;
@@ -604,9 +603,10 @@ public:
 	Arguments:
 	  - streamData: Reference to the stream variable used.
 	  - storeSenderInfo: If set to true, the sender's info is saved and can be retrieved by calling GetRemoteSocketInfo(). Applicable if this socket is a UDP server.
+	  - resolveSenderHostName: Used in conjunction with storeSenderInfo. If storeSenderInfo is false, this does nothing. Setting this to true resolves and stores the sender's HostName.
 	*/
 	template<typename T>
-	int ReceiveUDP(std::basic_iostream<T>& streamData, bool storeSenderInfo = false)
+	int ReceiveUDP(std::basic_iostream<T>& streamData, bool storeSenderInfo = false, bool resolveSenderHostName = false)
 	{
 		if (thisSocketInfo.Protocol == IPPROTO::IPPROTO_UDP)
 		{
@@ -620,17 +620,11 @@ public:
 			{
 				streamData << (T*)rxBuffer.data();
 
-				if (storeSenderInfo)
+				if (storeSenderInfo && (remoteSocketInfo.size() < maxRemoteSocketInfo))
 				{
-					if (remoteSocketInfo.size() < maxRemoteSocketInfo)
-					{
-						GetIPFromSockAddr(senderInfo);
-						GetPortFromSockAddr(senderInfo);
-						ResolveHostName(senderInfo);
-
-						CheckAndAppendSocketInfo(senderInfo);
-					}
-				}	
+					if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), senderInfo) == remoteSocketInfo.end())
+						std::future<void> fut = std::async(std::launch::async, &NetSocket::AppendSocketInfo, this, senderInfo, resolveSenderHostName);
+				}
 			}
 
 			return recvBytes;
@@ -645,8 +639,9 @@ public:
 	Arguments:
 	  - server: This argument accepts either a domain name or an IP address.
 	  - serverPort: The port number of the server to connect to.
+	  - resolveServerHostName: Setting this to true resolves and stores the server's HostName.
 	*/
-	int ConnectToServerTCP(const char* server, const uint16_t& serverPort)
+	int ConnectToServerTCP(const char* server, const uint16_t& serverPort, bool resolveServerHostName = false)
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_CLIENT)
 		{
@@ -695,7 +690,9 @@ public:
 
 			GetIPFromSockAddr(serverInfo);
 			GetPortFromSockAddr(serverInfo);
-			ResolveHostName(serverInfo);
+			
+			if (resolveServerHostName)
+				ResolveHostName(serverInfo);
 
 			bool ret = (connect(thisSocketInfo.SocketFD, (sockaddr*)&serverInfo.Addr, sizeof(sockaddr)) != SOCKET_ERROR);
 			
@@ -856,13 +853,7 @@ public:
 	bool StartListeningTCP(const int& maxInQueue)
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
-		{
-			if (maxInQueue > 0)
-				return (listen(thisSocketInfo.SocketFD, maxInQueue) != SOCKET_ERROR);
-			else
-				return false;
-		}
-			
+			return (maxInQueue > 0) ? (listen(thisSocketInfo.SocketFD, maxInQueue) != SOCKET_ERROR) : false;		
 		else
 			return false;
 	}
@@ -873,10 +864,7 @@ public:
 	*/
 	bool StopListeningTCP()
 	{
-		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
-			return (closesocket(thisSocketInfo.SocketFD) != SOCKET_ERROR);
-		else
-			return false;
+		return (thisSocketInfo.Type == SocketType::TCP_SERVER) ? (closesocket(thisSocketInfo.SocketFD) != SOCKET_ERROR) : false;
 	}
 
 	//Closes the connection between this socket and a connected client by specifying the client's Socket File Descriptor.
@@ -888,8 +876,15 @@ public:
 			{
 				if (sockIter->SocketFD == sockFD)
 				{
-					closesocket(sockFD);
-					sockIter = remoteSocketInfo.erase(sockIter);
+					closesocket(sockFD);					
+					{
+#ifdef NETSOCKET_MIN_CPP17
+						std::scoped_lock remoteSocketLock{ remoteSocketMutex };
+#else
+						std::lock_guard<std::mutex> remoteSocketLock(remoteSocketMutex);
+#endif
+						sockIter = remoteSocketInfo.erase(sockIter);
+					}
 					break;
 				}
 			}
@@ -921,7 +916,7 @@ public:
 	}
 
 	//Accepts and resolves information of an incoming client connection.
-	bool AcceptIncomingClientTCP()
+	bool AcceptIncomingClientTCP(bool resolveClientHostName = false)
 	{
 		if (thisSocketInfo.Type == SocketType::TCP_SERVER)
 		{
@@ -933,11 +928,7 @@ public:
 			if (result > 0)
 			{
 				newSocket.SocketFD = result;
-				GetIPFromSockAddr(newSocket);
-				GetPortFromSockAddr(newSocket);
-				ResolveHostName(newSocket);
-
-				CheckAndAppendSocketInfo(newSocket);
+				CheckAndAppendSocketInfo(newSocket, resolveClientHostName);
 
 				return true;
 			}
@@ -1026,11 +1017,6 @@ public:
 			return 0;
 	}
 
-#elif SOCKET_PLATFORM_UNIX
-	//TODO
-#endif
-
-protected:
 	//Get receive buffer size
 	const uint32_t& GetRxBufferSize() const
 	{
@@ -1045,13 +1031,28 @@ protected:
 	}
 
 	//Get an IP address of a socket in string representation
+	inline void GetIPFromSockAddr(const sockaddr_in& sockAddr, std::string& ipAddr)
+	{
+		if (ipAddr.size() != INET_ADDRSTRLEN)
+			ipAddr.resize(INET_ADDRSTRLEN);
+		
+		const char* retStr = inet_ntop(AF_INET, &sockAddr.sin_addr, &ipAddr[0], INET_ADDRSTRLEN);
+	}
+
+	//Get an IP address of a socket in string representation
 	inline void GetIPFromSockAddr(SocketInfo& socket)
 	{
 		const char* retStr = inet_ntop(AF_INET, &socket.Addr.sin_addr, socket.IPAddress, INET_ADDRSTRLEN);
 	}
-	
+
 	//Get the port number of a socket
-	inline void GetPortFromSockAddr(SocketInfo& socket) const
+	inline void GetPortFromSockAddr(const sockaddr_in& sockAddr, uint16_t& portNum)
+	{
+		portNum = ntohs(sockAddr.sin_port);
+	}
+
+	//Get the port number of a socket
+	inline void GetPortFromSockAddr(SocketInfo& socket)
 	{
 		socket.Port = ntohs(socket.Addr.sin_port);
 	}
@@ -1059,15 +1060,49 @@ protected:
 	inline bool ResolveHostName(SocketInfo& socket)
 	{
 		memset(socket.Service, '\0', sizeof(socket.Service));
-		memset(socket.HostName, '\0', sizeof(socket.HostName));	
-		
+		memset(socket.HostName, '\0', sizeof(socket.HostName));
+
 		return (getnameinfo((sockaddr*)&socket.Addr, sizeof(sockaddr), socket.HostName, NI_MAXHOST, socket.Service, NI_MAXSERV, 0) == 0);
 	}
 
-	inline void CheckAndAppendSocketInfo(const SocketInfo& socket)
+#elif SOCKET_PLATFORM_UNIX
+	//TODO
+#endif
+
+protected:
+	inline void CheckAndAppendSocketInfo(SocketInfo socketInfo, bool resolveHostName = false)
 	{
-		if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), socket) == remoteSocketInfo.end())
-			remoteSocketInfo.emplace_back(socket);
+#ifdef NETSOCKET_MIN_CPP17
+		std::scoped_lock remoteSocketLock{ remoteSocketMutex };
+#else
+		std::lock_guard<std::mutex> remoteSocketLock(remoteSocketMutex);
+#endif
+
+		if (std::find(remoteSocketInfo.begin(), remoteSocketInfo.end(), socketInfo) == remoteSocketInfo.end())
+		{
+			remoteSocketInfo.push_back(socketInfo);
+			GetIPFromSockAddr(remoteSocketInfo.back());
+			GetPortFromSockAddr(remoteSocketInfo.back());
+
+			if (resolveHostName)
+				ResolveHostName(remoteSocketInfo.back());
+		}
+	}
+
+	inline void AppendSocketInfo(SocketInfo socketInfo, bool resolveHostName = false)
+	{
+#ifdef NETSOCKET_MIN_CPP17
+		std::scoped_lock remoteSocketLock{ remoteSocketMutex };
+#else
+		std::lock_guard<std::mutex> remoteSocketLock(remoteSocketMutex);
+#endif
+
+		remoteSocketInfo.push_back(socketInfo);
+		GetIPFromSockAddr(remoteSocketInfo.back());
+		GetPortFromSockAddr(remoteSocketInfo.back());
+
+		if (resolveHostName)
+			ResolveHostName(remoteSocketInfo.back());
 	}
 
 private:
@@ -1079,7 +1114,8 @@ private:
 	*/
 	std::vector<SocketInfo> remoteSocketInfo;
 	uint32_t maxRemoteSocketInfo = DEFAULT_NUM_REMOTE;
-	
+	std::mutex remoteSocketMutex;
+
 	LocalSocketInfo thisSocketInfo;
 	sockaddr_in		udpTargetAddr;
 	
