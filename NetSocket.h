@@ -1033,10 +1033,9 @@ public:
 	//Get an IP address of a socket in string representation
 	inline void GetIPFromSockAddr(const sockaddr_in& sockAddr, std::string& ipAddr)
 	{
-		if (ipAddr.size() != INET_ADDRSTRLEN)
-			ipAddr.resize(INET_ADDRSTRLEN);
+		char addrBuff[INET_ADDRSTRLEN];
 		
-		const char* retStr = inet_ntop(AF_INET, &sockAddr.sin_addr, &ipAddr[0], INET_ADDRSTRLEN);
+		ipAddr = inet_ntop(AF_INET, &sockAddr.sin_addr, addrBuff, INET_ADDRSTRLEN);
 	}
 
 	//Get an IP address of a socket in string representation
